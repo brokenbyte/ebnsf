@@ -1,0 +1,99 @@
+<svg class="railroad" viewBox="0 0 644 42" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<style type="text/css">
+svg.railroad {
+background-color: hsl(30, 20%, 95%);
+background-size: 15px 15px;
+background-image: linear-gradient(to right, rgba(30, 30, 30, .05) 1px, transparent 1px),
+		  linear-gradient(to bottom, rgba(30, 30, 30, .05) 1px, transparent 1px);
+}
+
+svg.railroad rect.railroad_canvas {
+stroke-width: 0px;
+fill: none;
+}
+
+svg.railroad path {
+stroke-width: 3px;
+stroke: black;
+fill: none;
+}
+
+svg.railroad .debug {
+stroke-width: 1px;
+stroke: red;
+}
+
+svg.railroad text {
+font: 14px monospace;
+text-anchor: middle;
+}
+
+svg.railroad .nonterminal text {
+font-weight: bold;
+}
+
+svg.railroad text.comment {
+font: italic 12px monospace;
+}
+
+svg.railroad rect {
+stroke-width: 3px;
+stroke: black;
+fill:hsl(-290, 70%, 90%);
+}
+
+svg.railroad g.labeledbox > rect {
+stroke-width: 1px;
+stroke: grey;
+stroke-dasharray: 5px;
+fill:rgba(90, 90, 150, .1);
+}
+</style>
+<rect class="railroad_canvas" height="100%" width="100%"/>
+<g class="verticalgrid">
+<g class="sequence">
+<path d=" M 10 21 a 5 5 0 0 1 5 -5 a 5 5 0 0 1 5 5 a 5 5 0 0 1 -5 5 a 5 5 0 0 1 -5 -5 m 10 0 h 5"/>
+<g class="sequence">
+<text class="comment" x="75" y="26">
+expression</text>
+<g class="sequence">
+<g class="nonterminal">
+<rect height="22" width="52" x="125" y="10"/>
+<text x="151" y="26">
+list</text>
+</g>
+<g class="sequence">
+<g class="nonterminal">
+<rect height="22" width="132" x="187" y="10"/>
+<text x="253" y="26">
+opt_whitespace</text>
+</g>
+<g class="terminal">
+<rect height="22" rx="10" ry="10" width="28" x="329" y="10"/>
+<text x="343" y="26">
+|</text>
+</g>
+<g class="nonterminal">
+<rect height="22" width="132" x="367" y="10"/>
+<text x="433" y="26">
+opt_whitespace</text>
+</g>
+<g class="nonterminal">
+<rect height="22" width="100" x="509" y="10"/>
+<text x="559" y="26">
+expression</text>
+</g>
+<path d=" M 319 21 h 10"/>
+<path d=" M 357 21 h 10"/>
+<path d=" M 499 21 h 10"/>
+</g>
+<path d=" M 177 21 h 10"/>
+</g>
+<path d=" M 115 21 h 10"/>
+</g>
+<path d=" M 619 21 a 5 5 0 0 1 5 -5 a 5 5 0 0 1 5 5 a 5 5 0 0 1 -5 5 a 5 5 0 0 1 -5 -5 m 10 0 h 5"/>
+<path d=" M 25 21 h 10"/>
+<path d=" M 609 21 h 10"/>
+</g>
+</g>
+</svg>

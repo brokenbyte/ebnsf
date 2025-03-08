@@ -16,6 +16,8 @@ struct EBNFParser;
 pub fn parse_ebnf(src: &str) -> Result<Diagram<DynNode>, Box<pest::error::Error<Rule>>> {
     let mut result = EBNFParser::parse(Rule::syntax, src)?;
 
+    // dbg!(&result);
+
     let trees = result.next().expect("expected root expr").into_inner();
 
     let nodes = trees
@@ -37,6 +39,8 @@ pub fn parse_ebnf(src: &str) -> Result<Diagram<DynNode>, Box<pest::error::Error<
 
 fn make_node(pair: Pair<'_, Rule>) -> Box<dyn rr::Node> {
     use Rule as R;
+
+    dbg!(&pair);
 
     match pair.as_rule() {
         R::rule => {
@@ -66,7 +70,14 @@ fn make_node(pair: Pair<'_, Rule>) -> Box<dyn rr::Node> {
             }
         }
         R::list => {
-            let seq = pair.into_inner().map(parse_term).collect::<Vec<_>>();
+            // dbg!(&pair);
+            let seq = pair
+                .into_inner()
+                .inspect(|n| {
+                    dbg!(&n);
+                })
+                .map(parse_term)
+                .collect::<Vec<_>>();
             Box::new(rr::Sequence::new(seq))
         }
         R::term => parse_term(pair),
@@ -87,6 +98,7 @@ fn make_node(pair: Pair<'_, Rule>) -> Box<dyn rr::Node> {
 
 fn parse_term(pair: Pair<'_, Rule>) -> DynNode {
     use Rule as R;
+    // println!("=====\n");
 
     let mut pairs = pair.into_inner();
     let pair = pairs.next().unwrap();
@@ -100,6 +112,8 @@ fn parse_term(pair: Pair<'_, Rule>) -> DynNode {
             unreachable!()
         }
     };
+
+    // dbg!(&pairs);
     let modifier = pairs.next().unwrap();
     parse_modifier(node, modifier)
 }

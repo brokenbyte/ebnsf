@@ -6,11 +6,11 @@ rules = { rule+ }
 
 rule = { lbrack ~ rule_name ~ rbrack ~ "::=" ~ expression ~ NEWLINE*}
 
-expression = { (( grouped_list ~ opt_modifier ) | list) ~ ( "\n"* ~ "|" ~ (grouped_list | list) )* }
+expression = { list ~ ( "\n"* ~ "|" ~ list )* }
 
-list = { (grouped_list ~ opt_modifier) | term+ }
+list = { grouped_list | term+ }
 
-term = { grouped_list ~ opt_modifier |(literal | lbrack ~ rule_name ~ rbrack) ~ opt_modifier }
+term = { (literal | lbrack ~ rule_name ~ rbrack) ~ opt_modifier }
 
 grouped_list = { lparen ~ expression ~ rparen ~ opt_modifier }
 

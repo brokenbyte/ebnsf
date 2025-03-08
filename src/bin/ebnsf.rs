@@ -18,7 +18,13 @@ fn main() {
 
     let ebnf = std::fs::read_to_string(&cli.input).unwrap();
 
-    let diagram = parse_ebnf(&ebnf).unwrap();
+    let diagram = match parse_ebnf(&ebnf) {
+        Ok(p) => p,
+        Err(e) => {
+            println!("{e}");
+            std::process::exit(1);
+        }
+    };
 
     let output = if let Some(path) = cli.output {
         PathBuf::from(path)

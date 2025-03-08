@@ -1,0 +1,1 @@
+<expression>     ::= <list> (<opt_whitespace> "|" <opt_whitespace> <expression>)
