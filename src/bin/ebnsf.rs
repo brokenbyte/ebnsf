@@ -1,5 +1,7 @@
+#![allow(unused)]
+
 use clap::Parser;
-use ebnsf::parse_ebnf;
+use ebnsf::{parse_ebnf, winnow};
 
 use std::path::PathBuf;
 
@@ -14,6 +16,14 @@ struct Cli {
 }
 
 fn main() {
+    let mut input = r#"('hello' 'world' <foo> | 'womp' 'bomp') | <honk> | "thonk""#;
+    let mut input = r#"<thonk>*"#;
+    let x = winnow::term(&mut input);
+    println!("input is: {}", input);
+    println!("x is:     {:?}", x);
+}
+
+fn main2() {
     let cli = Cli::parse();
 
     let ebnf = std::fs::read_to_string(&cli.input).unwrap();

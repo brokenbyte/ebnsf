@@ -1,5 +1,7 @@
 #![allow(unused, clippy::all)]
 
+pub mod winnow;
+
 use std::path::PathBuf;
 
 use pest::{Parser, iterators::Pair};

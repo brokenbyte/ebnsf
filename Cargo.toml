@@ -13,6 +13,7 @@ clap = { version = "4.5.31", features = ["derive"] }
 pest = "2.7.15"
 pest_derive = "2.7.15"
 railroad = { version = "0.3.2", features = ["resvg"] }
+winnow = "0.7.13"
 
 [dev-dependencies]
 insta = "1.42.2"
