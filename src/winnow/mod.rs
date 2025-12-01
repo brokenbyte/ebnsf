@@ -1,39 +1,175 @@
+use std::fmt::Display;
+use std::str::FromStr;
+
 use winnow::ascii::{
-    alpha1, alphanumeric0, alphanumeric1, line_ending, multispace0, multispace1, space0, space1,
+    alpha1, alphanumeric0, alphanumeric1, line_ending, multispace0, multispace1, newline, space0,
+    space1,
 };
 use winnow::combinator::{
-    alt, backtrack_err, delimited, dispatch, empty, fail, opt, peek, preceded, repeat, terminated,
+    alt, backtrack_err, delimited, dispatch, empty, fail, opt, peek, preceded, repeat, separated,
+    terminated,
 };
 use winnow::error::InputError;
 use winnow::prelude::*;
 use winnow::token::{any, none_of, one_of, take_while};
 use winnow::{error::ParserError, token::take_till};
 
-/*
- * nonterminal = @{ lbrack ~ rule_name ~ rbrack }
- *
- * term = { (literal | nonterminal) ~ opt_modifier}
- *
- * literal = @{
- *     "\"" ~ not_quote_or_nl+ ~ "\"" |
- *     "'" ~ not_squote_or_nl+ ~ "'"
- * }
- *
- * not_quote_or_nl = {
- *     !(                // if the following text is not
- *         "\""          //     a quote
- *         | "\n"        //     or a newline
- *     )
- *     ~ ( "\\" ~ "\"" | ANY ) // then consume one character
- * }
- * not_squote_or_nl = {
- *     !(                // if the following text is not
- *         "\'"          //     a quote
- *         | "\n"        //     or a newline
- *     )
- *     ~ ( "\\" ~ "\'" | ANY ) // then consume one character
- * }
- */
+// rules = { rule+ }
+pub fn rules<'a>(input: &'a mut &str) -> ModalResult<EbnfGrammar> {
+    let rules: Vec<_> = repeat(1.., delimited(multispace0, rule, multispace0)).parse_next(input)?;
+
+    Ok(EbnfGrammar { rules })
+}
+
+// rule = { nonterminal ~ "::=" ~ sequence_list ~ NEWLINE*}
+pub fn rule<'a>(input: &'a mut &str) -> ModalResult<Rule> {
+    let (name, seqlist) = (
+        terminated(nonterminal, (space0, "::=", space0)),
+        separated(1.., sequence, (multispace0, '|', multispace0)),
+    )
+        .parse_next(input)?;
+
+    let mut rule = Rule {
+        name,
+        choices: seqlist,
+    };
+    // rule.extend(seqlist.into_iter());
+
+    Ok(rule)
+}
+
+// sequence_list = { sequence ~ ( "\n"* ~ "|" ~ "\n"* ~ sequence )* }
+pub fn sequence_list<'a>(input: &'a mut &str) -> ModalResult<Vec<SequenceItem>> {
+    let (mut x, y) = (
+        sequence,
+        opt(preceded((multispace0, '|', multispace0), sequence_list)),
+    )
+        .parse_next(input)?;
+
+    let y = y.unwrap_or(vec![]);
+    x.extend(y);
+
+    Ok(x)
+}
+
+// sequence = { (term | group)+ }
+pub fn sequence<'a>(input: &'a mut &str) -> ModalResult<Vec<SequenceItem>> {
+    let mut x: Vec<SequenceItem> =
+        repeat(1.., terminated(alt((list, group)), space0)).parse_next(input)?;
+
+    Ok(x)
+}
+
+// group = { "(" ~ NEWLINE* ~ (sequence_list) ~ NEWLINE* ~ ")" ~ opt_modifier}
+pub fn group<'a>(input: &'a mut &str) -> ModalResult<SequenceItem> {
+    let (items, modifier) = (
+        delimited(
+            (multispace0, '(', multispace0),
+            sequence_list,
+            (multispace0, ')'),
+        ),
+        opt(modifier),
+    )
+        .parse_next(input)?;
+
+    Ok(SequenceItem::Group(Group { items, modifier }))
+}
+
+// nonterminal = @{ lbrack ~ rule_name ~ rbrack }
+pub fn nonterminal<'a>(input: &'a mut &str) -> ModalResult<String> {
+    delimited('<', rule_name, '>').parse_next(input)
+}
+
+// term = { (literal | nonterminal) ~ opt_modifier}
+pub fn term<'a>(input: &'a mut &str) -> ModalResult<Term> {
+    (
+        alt((
+            literal.map(|l| Token::Terminal(l)),
+            nonterminal.map(|nt| Token::NonTerminal(nt)),
+        )),
+        opt(modifier),
+    )
+        .parse_next(input)
+        .map(|(atom, modifier)| Term { atom, modifier })
+}
+
+#[derive(Debug)]
+pub struct EbnfGrammar {
+    pub rules: Vec<Rule>,
+}
+
+#[derive(Debug)]
+pub struct Rule {
+    name: String,
+    choices: Vec<Vec<SequenceItem>>,
+}
+impl Display for Rule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<{}> ::= ", self.name)?;
+        for choice in &self.choices {
+            for i in choice {
+                write!(f, "{i}")?;
+            }
+            write!(f, "|")?;
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub enum SequenceItem {
+    Term(Term),
+    Group(Group),
+}
+impl Display for SequenceItem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Term(t) => {
+                write!(f, "{t}")
+            }
+            Self::Group(g) => {
+                write!(f, "{g}")
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Term {
+    atom: Token,
+    modifier: Option<Modifier>,
+}
+impl Display for Term {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.atom)?;
+        if let Some(m) = &self.modifier {
+            write!(f, "{}", m)
+        } else {
+            write!(f, "_ ")
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Group {
+    items: Vec<SequenceItem>,
+    modifier: Option<Modifier>,
+}
+impl Display for Group {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "(")?;
+        for i in &self.items {
+            write!(f, "{i}")?;
+        }
+        write!(f, ")")?;
+        if let Some(m) = &self.modifier {
+            write!(f, "{}", m)
+        } else {
+            write!(f, "_ ")
+        }
+    }
+}
 
 pub fn literal<'a>(input: &'a mut &str) -> ModalResult<String> {
     let lit = alt((
@@ -61,51 +197,66 @@ pub fn rule_name<'a>(input: &'a mut &str) -> ModalResult<String> {
     Ok(rule)
 }
 
-pub fn term<'a>(input: &'a mut &str) -> ModalResult<String> {
-    (alt((literal, nonterminal)), opt(modifier).take())
-        .parse_next(input)
-        .map(|(mut a, b)| {
-            a.extend(b.chars());
-            a
-        })
+pub fn list<'a>(input: &'a mut &str) -> ModalResult<SequenceItem> {
+    let x: Vec<_> = repeat(1.., terminated(term, multispace0)).parse_next(input)?;
+    let y = x.into_iter().map(|t| SequenceItem::Term(t)).collect();
+
+    let z = SequenceItem::Group(Group {
+        items: y,
+        modifier: None,
+    });
+
+    Ok(z)
 }
 
-/*
- * pub fn foo<'a>(input: &'a mut &str) -> ModalResult<String> {
- *     terminated(term, multispace0).parse_next(input)
- * }
- */
-
-pub fn list<'a>(input: &'a mut &str) -> ModalResult<Vec<String>> {
-    repeat(1.., terminated(term, multispace0)).parse_next(input)
+pub fn modifier<'a>(input: &'a mut &str) -> ModalResult<Modifier> {
+    alt((
+        '?'.map(|c| Modifier::QMark),
+        '+'.map(|c| Modifier::Plus),
+        '*'.map(|c| Modifier::Star),
+    ))
+    .parse_next(input)
 }
 
-pub fn expression<'a>(input: &'a mut &str) -> ModalResult<Vec<String>> {
-    let mut l1 = list.parse_next(input)?;
-    let rest: Vec<Vec<String>> =
-        repeat(0.., preceded(('|', multispace0), list)).parse_next(input)?;
-    let rest = rest.into_iter().flatten();
-    l1.extend(rest.into_iter());
-
-    Ok(l1)
-}
-pub fn group<'a>(input: &'a mut &str) -> ModalResult<Vec<String>> {
-    alt((expression, delimited('(', expression, ')'))).parse_next(input)
+#[derive(Debug)]
+pub struct Sequence {
+    nodes: Vec<Node>,
 }
 
-pub fn sequence<'a>(input: &'a mut &str) -> ModalResult<Vec<String>> {
-    let mut x: Vec<Vec<String>> =
-        repeat(1.., alt((term.map(|t| vec![t]), group))).parse_next(input)?;
-    let x = x.into_iter().flatten().collect();
-    Ok(x)
+#[derive(Debug)]
+pub enum Node {
+    Term(Term),
+    Group(Group),
 }
 
-pub fn modifier<'a>(input: &'a mut &str) -> ModalResult<String> {
-    alt(('?', '+', '*')).parse_next(input).map(|c| c.into())
+#[derive(Debug)]
+pub enum Token {
+    Terminal(String),
+    NonTerminal(String),
+}
+impl Display for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Token::Terminal(s) => write!(f, "\"{s}\""),
+            Token::NonTerminal(s) => write!(f, "<{s}>"),
+        }
+    }
 }
 
-pub fn nonterminal<'a>(input: &'a mut &str) -> ModalResult<String> {
-    delimited('<', rule_name, '>').parse_next(input)
+#[derive(Debug)]
+pub enum Modifier {
+    Star,
+    Plus,
+    QMark,
+}
+impl Display for Modifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Star => write!(f, "*"),
+            Self::Plus => write!(f, "+"),
+            Self::QMark => write!(f, "?"),
+        }
+    }
 }
 
 #[cfg(test)]

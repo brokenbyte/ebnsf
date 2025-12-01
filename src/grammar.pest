@@ -17,7 +17,7 @@ nonterminal = @{ lbrack ~ rule_name ~ rbrack }
 term = { (literal | nonterminal) ~ opt_modifier}
 
 literal = @{
-    "\"" ~ not_quote_or_nl+ ~ "\"" | 
+    "\"" ~ not_quote_or_nl+ ~ "\"" |
     "'" ~ not_squote_or_nl+ ~ "'"
 }
 
