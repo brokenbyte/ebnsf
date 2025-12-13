@@ -100,8 +100,8 @@ pub struct EbnfGrammar {
 
 #[derive(Debug)]
 pub struct Rule {
-    name: String,
-    choices: Vec<Vec<SequenceItem>>,
+    pub name: String,
+    pub choices: Vec<Vec<SequenceItem>>,
 }
 impl Display for Rule {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -137,8 +137,8 @@ impl Display for SequenceItem {
 
 #[derive(Debug)]
 pub struct Term {
-    atom: Token,
-    modifier: Option<Modifier>,
+    pub atom: Token,
+    pub modifier: Option<Modifier>,
 }
 impl Display for Term {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -153,8 +153,8 @@ impl Display for Term {
 
 #[derive(Debug)]
 pub struct Group {
-    items: Vec<SequenceItem>,
-    modifier: Option<Modifier>,
+    pub items: Vec<SequenceItem>,
+    pub modifier: Option<Modifier>,
 }
 impl Display for Group {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

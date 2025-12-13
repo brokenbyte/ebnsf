@@ -2,7 +2,11 @@
 
 use ::winnow::Parser as _;
 use clap::Parser;
-use ebnsf::{parse_ebnf, winnow};
+use ebnsf::{
+    parse_ebnf,
+    winnow::{self, EbnfGrammar},
+};
+use railroad::{self as rr, Diagram, Empty};
 
 use std::path::PathBuf;
 
@@ -28,37 +32,180 @@ fn main() {
     // test_sequence_list();
 
     test_grammar();
+
+    /*
+     *     let cli = Cli::parse();
+     *
+     *     let ebnf = std::fs::read_to_string(&cli.input).unwrap();
+     *
+     *     let grammar = winnow::rules.parse_next(&mut ebnf.as_str()).unwrap();
+     *     dbg!(grammar);
+     */
+
+    /*
+     *     let diagram = render_grammar(&grammar);
+     *
+     *     std::fs::write("bnf_winnow.svg", diagram.to_string().into_bytes()).unwrap();
+     */
+}
+
+pub type DynNode = Box<dyn rr::Node>;
+
+fn render_grammar(ebnf: &EbnfGrammar) -> rr::Diagram<DynNode> {
+    let nodes = ebnf
+        .rules
+        .iter()
+        .map(|r| {
+            Box::new(rr::Sequence::new(vec![
+                Box::new(rr::SimpleStart) as DynNode,
+                render_rule(r),
+                Box::new(rr::SimpleStart),
+            ]))
+        })
+        .collect::<Vec<_>>();
+
+    let mut diagram = rr::Diagram::new(Box::new(rr::VerticalGrid::new(nodes)) as DynNode);
+    diagram.add_css(rr::DEFAULT_CSS);
+
+    diagram
+}
+
+fn render_rule(rule: &winnow::Rule) -> DynNode {
+    let name = Box::new(rr::Comment::new(unescape(&rule.name))) as DynNode;
+    let mut choices = rule
+        .choices
+        .iter() // Each arm of the rule, e.g. <foo> | <bar>
+        .map(|choice| {
+            let items = choice;
+            items
+                .iter() // Each node in the current rule
+                .map(|item| render_sequence_item(item))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    if choices.len() == 1 {
+        // Only one choice/production for the rule
+        let definition = choices.remove(0);
+
+        let mut rule = Vec::with_capacity(1 + definition.len());
+        rule.insert(0, name);
+        rule.extend(definition);
+
+        Box::new(rr::Sequence::new(rule))
+    } else {
+        // Multiple choices/productions for the rule
+        let productions = choices
+            .into_iter()
+            .map(rr::Sequence::new)
+            .collect::<Vec<_>>();
+
+        let definitino = Box::new(rr::Choice::new(productions));
+
+        Box::new(rr::Sequence::new(vec![name, definitino]))
+    }
+
+    /*
+     *             if rule_def.len() == 1 {
+     *                 let mut node = rule_def.remove(0);
+     *                 Box::new(rr::Sequence::new(vec![name, node]))
+     *             } else {
+     *                 let x = vec![name, Box::new(rr::Choice::new(rule_def))];
+     *
+     *                 Box::new(rr::Sequence::new(x))
+     *             }
+     *     todo!()
+     */
+
+    //
+}
+
+fn render_sequence_item(seq_item: &winnow::SequenceItem) -> DynNode {
+    match seq_item {
+        winnow::SequenceItem::Term(term) => render_term(term),
+        winnow::SequenceItem::Group(group) => render_group(group),
+    }
+}
+
+fn render_group(group: &winnow::Group) -> DynNode {
+    let items = group
+        .items
+        .iter()
+        .map(render_sequence_item)
+        .collect::<Vec<_>>();
+
+    let s = Box::new(rr::Sequence::new(items));
+
+    render_modifier(s, &group.modifier)
+}
+
+fn render_modifier(node: DynNode, modifier: &Option<winnow::Modifier>) -> DynNode {
+    if let Some(m) = modifier {
+        match m {
+            winnow::Modifier::QMark => Box::new(rr::Optional::new(node)),
+            winnow::Modifier::Plus => Box::new(rr::Repeat::new(node, rr::Empty)),
+            winnow::Modifier::Star => Box::new(rr::Optional::new(rr::Repeat::new(node, rr::Empty))),
+        }
+    } else {
+        node
+    }
+}
+
+fn render_term(term: &winnow::Term) -> DynNode {
+    let atom: DynNode = match &term.atom {
+        winnow::Token::Terminal(s) => Box::new(rr::Terminal::new(unescape(s))),
+        winnow::Token::NonTerminal(s) => Box::new(rr::NonTerminal::new(unescape(s))),
+    };
+
+    render_modifier(atom, &term.modifier)
+}
+fn unescape(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut iter = s.chars();
+    while let Some(ch) = iter.next() {
+        result.push(match ch {
+            '\\' => {
+                let mut peekable = iter.clone().peekable();
+                let escaped = peekable.peek().expect("no escaped char?");
+                if ['"', '\'', '\\'].contains(escaped) {
+                    iter.next().unwrap()
+                } else {
+                    ch
+                }
+            }
+            _ => ch,
+        });
+    }
+    println!("unescape input: {s}");
+    println!("unescape output: {result}");
+    result
 }
 
 fn test_grammar() {
     let mut input = "\
-<rule> ::= <foo>
-        | (<foo> | <bar>)
-        | (
-                <fizz>
-              | (\"foo\" | \"bar\")
-          )
+<syntax> ::= <rule>
+<syntax> ::= <rule>
+<syntax> ::= <rule>
+<syntax> ::= <rule>
 
-<rule> ::= <foo>
-        | (<foo> | <bar>)
-        | (
-                <fizz>
-              | (\"foo\" | \"bar\")
-          )
-
-<rule> ::= <foo>
-        | (<foo> | <bar> | (\"yoinky\"  \"sploinky\"))
-        | (
-                <aaa>
-              | (\"bbb\" | \"ccc\")
-          )
 ";
+/*
+ * 
+ * let mut input = "\
+ * <syntax>         ::= <rule>+
+ * 
+ * 
+ * <rule>           ::= <opt_whitespace> \"<\" <rule_name> \">\" <opt_whitespace> \"::=\" <opt_whitespace> <group> <line_end>
+ * ";
+ */
+    let x = winnow::rules.parse(&mut input).unwrap();
+    dbg!(x);
 
-    let x = winnow::rules.parse_next(&mut input).unwrap();
-
-    for r in &x.rules {
-        println!("{r}")
-    }
+    /*
+     * for r in &x.rules {
+     *     println!("{r}")
+     * }
+     */
 
     //
 }
@@ -75,6 +222,7 @@ fn test_rule() {
 ";
     println!("input is: \n&{}&", input);
     let x = winnow::rule(&mut input).unwrap();
+
     println!("input is: &{}&", input);
     println!("x is:     {}", x);
 }
