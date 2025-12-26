@@ -6,10 +6,23 @@ use winnow::token::take_while;
 
 // Custom data structures for EBNF AST
 #[derive(Debug, Clone, PartialEq)]
-pub enum Element {
+pub enum Modifier {
+    Optional,   // ?
+    ZeroOrMore, // *
+    OneOrMore,  // +
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Atom {
     Terminal(String),
     Nonterminal(String),
     Group(Alternative),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Element {
+    pub atom: Atom,
+    pub modifier: Option<Modifier>,
 }
 
 pub type Sequence = Vec<Element>;
@@ -23,28 +36,58 @@ pub struct Rule {
 
 pub type Grammar = Vec<Rule>;
 
+// Modifier parser: parses ?, *, + (optional, at most one)
+pub fn modifier<'a>(input: &'a mut &str) -> ModalResult<Option<Modifier>> {
+    use winnow::combinator::opt;
+    use winnow::token::one_of;
+    opt(one_of(['?', '*', '+']).map(|c| match c {
+        '?' => Modifier::Optional,
+        '*' => Modifier::ZeroOrMore,
+        '+' => Modifier::OneOrMore,
+        _ => unreachable!(),
+    }))
+    .parse_next(input)
+}
+
+// Element parser: combines atom with optional modifier
+pub fn element<'a>(input: &'a mut &str) -> ModalResult<Element> {
+    let (atom, modifier) = (atom, modifier).parse_next(input)?;
+    Ok(Element { atom, modifier })
+}
+
 // Terminal parser: parses "alphanum..."
 pub fn terminal<'a>(input: &'a mut &str) -> ModalResult<Element> {
     delimited('"', rule_name, '"')
-        .map(Element::Terminal)
+        .map(|content| Element {
+            atom: Atom::Terminal(content),
+            modifier: None,
+        })
         .parse_next(input)
 }
 
 // Nonterminal parser: parses <alphanum...>
 pub fn nonterminal<'a>(input: &'a mut &str) -> ModalResult<Element> {
     delimited('<', rule_name, '>')
-        .map(Element::Nonterminal)
+        .map(|content| Element {
+            atom: Atom::Nonterminal(content),
+            modifier: None,
+        })
         .parse_next(input)
 }
 
 // Atom parser: chooses between terminal, nonterminal, or group
-pub fn atom<'a>(input: &'a mut &str) -> ModalResult<Element> {
-    alt((terminal, nonterminal, group)).parse_next(input)
+pub fn atom<'a>(input: &'a mut &str) -> ModalResult<Atom> {
+    alt((
+        terminal.map(|e| e.atom),
+        nonterminal.map(|e| e.atom),
+        group.map(Atom::Group),
+    ))
+    .parse_next(input)
 }
 
-// Sequence parser: space-separated list of atoms
+// Sequence parser: space-separated list of elements
 pub fn sequence<'a>(input: &'a mut &str) -> ModalResult<Sequence> {
-    separated(1.., atom, space1).parse_next(input)
+    separated(1.., element, space1).parse_next(input)
 }
 
 // Top-level parser: trims whitespace and parses sequences separated by |
@@ -54,8 +97,8 @@ pub fn parse_sequence<'a>(input: &'a mut &str) -> ModalResult<Alternative> {
 }
 
 // Group parser: parses (sequence) recursively, supporting alternatives
-pub fn group<'a>(input: &'a mut &str) -> ModalResult<Element> {
-    delimited('(', parse_sequence.map(Element::Group), ')').parse_next(input)
+pub fn group<'a>(input: &'a mut &str) -> ModalResult<Alternative> {
+    delimited('(', parse_sequence, ')').parse_next(input)
 }
 
 // Parses a single rule: <rule_name> ::= <alternatives>
@@ -66,8 +109,8 @@ pub fn parse_rule<'a>(input: &'a mut &str) -> ModalResult<Rule> {
         preceded((space0, "::=", space0), parse_sequence),
     )
         .parse_next(input)?;
-    let name = match name_elem {
-        Element::Nonterminal(n) => n,
+    let name = match name_elem.atom {
+        Atom::Nonterminal(n) => n,
         _ => unreachable!(),
     };
     Ok(Rule {
@@ -105,9 +148,18 @@ mod tests {
         assert_eq!(
             parse_sequence(&mut input).unwrap(),
             vec![vec![
-                Element::Nonterminal("foo".to_string()),
-                Element::Terminal("bar".to_string()),
-                Element::Nonterminal("baz".to_string())
+                Element {
+                    atom: Atom::Nonterminal("foo".to_string()),
+                    modifier: None
+                },
+                Element {
+                    atom: Atom::Terminal("bar".to_string()),
+                    modifier: None
+                },
+                Element {
+                    atom: Atom::Nonterminal("baz".to_string()),
+                    modifier: None
+                }
             ]]
         );
 
@@ -115,10 +167,22 @@ mod tests {
         assert_eq!(
             parse_sequence(&mut input2).unwrap(),
             vec![vec![
-                Element::Nonterminal("foo".to_string()),
-                Element::Nonterminal("woo".to_string()),
-                Element::Nonterminal("boo".to_string()),
-                Element::Terminal("baz".to_string())
+                Element {
+                    atom: Atom::Nonterminal("foo".to_string()),
+                    modifier: None
+                },
+                Element {
+                    atom: Atom::Nonterminal("woo".to_string()),
+                    modifier: None
+                },
+                Element {
+                    atom: Atom::Nonterminal("boo".to_string()),
+                    modifier: None
+                },
+                Element {
+                    atom: Atom::Terminal("baz".to_string()),
+                    modifier: None
+                }
             ]]
         );
 
@@ -126,10 +190,22 @@ mod tests {
         assert_eq!(
             parse_sequence(&mut input3).unwrap(),
             vec![vec![
-                Element::Terminal("honk".to_string()),
-                Element::Terminal("bonk".to_string()),
-                Element::Terminal("tonk".to_string()),
-                Element::Nonterminal("wonk".to_string())
+                Element {
+                    atom: Atom::Terminal("honk".to_string()),
+                    modifier: None
+                },
+                Element {
+                    atom: Atom::Terminal("bonk".to_string()),
+                    modifier: None
+                },
+                Element {
+                    atom: Atom::Terminal("tonk".to_string()),
+                    modifier: None
+                },
+                Element {
+                    atom: Atom::Nonterminal("wonk".to_string()),
+                    modifier: None
+                }
             ]]
         );
 
@@ -137,14 +213,35 @@ mod tests {
         assert_eq!(
             parse_sequence(&mut input4).unwrap(),
             vec![vec![
-                Element::Nonterminal("foo".to_string()),
-                Element::Nonterminal("bar".to_string()),
-                Element::Group(vec![vec![
-                    Element::Terminal("hello".to_string()),
-                    Element::Nonterminal("baz".to_string())
-                ]]),
-                Element::Terminal("world".to_string()),
-                Element::Nonterminal("buz".to_string())
+                Element {
+                    atom: Atom::Nonterminal("foo".to_string()),
+                    modifier: None
+                },
+                Element {
+                    atom: Atom::Nonterminal("bar".to_string()),
+                    modifier: None
+                },
+                Element {
+                    atom: Atom::Group(vec![vec![
+                        Element {
+                            atom: Atom::Terminal("hello".to_string()),
+                            modifier: None
+                        },
+                        Element {
+                            atom: Atom::Nonterminal("baz".to_string()),
+                            modifier: None
+                        }
+                    ]]),
+                    modifier: None
+                },
+                Element {
+                    atom: Atom::Terminal("world".to_string()),
+                    modifier: None
+                },
+                Element {
+                    atom: Atom::Nonterminal("buz".to_string()),
+                    modifier: None
+                }
             ]]
         );
     }
@@ -156,12 +253,24 @@ mod tests {
             parse_sequence(&mut input).unwrap(),
             vec![
                 vec![
-                    Element::Nonterminal("foo".to_string()),
-                    Element::Nonterminal("bar".to_string())
+                    Element {
+                        atom: Atom::Nonterminal("foo".to_string()),
+                        modifier: None
+                    },
+                    Element {
+                        atom: Atom::Nonterminal("bar".to_string()),
+                        modifier: None
+                    }
                 ],
                 vec![
-                    Element::Terminal("baz".to_string()),
-                    Element::Nonterminal("qux".to_string())
+                    Element {
+                        atom: Atom::Terminal("baz".to_string()),
+                        modifier: None
+                    },
+                    Element {
+                        atom: Atom::Nonterminal("qux".to_string()),
+                        modifier: None
+                    }
                 ]
             ]
         );
@@ -171,24 +280,66 @@ mod tests {
             parse_sequence(&mut input2).unwrap(),
             vec![
                 vec![
-                    Element::Nonterminal("foo".to_string()),
-                    Element::Nonterminal("bar".to_string()),
-                    Element::Group(vec![vec![
-                        Element::Terminal("hello".to_string()),
-                        Element::Nonterminal("baz".to_string())
-                    ]]),
-                    Element::Terminal("world".to_string()),
-                    Element::Nonterminal("buz".to_string())
+                    Element {
+                        atom: Atom::Nonterminal("foo".to_string()),
+                        modifier: None
+                    },
+                    Element {
+                        atom: Atom::Nonterminal("bar".to_string()),
+                        modifier: None
+                    },
+                    Element {
+                        atom: Atom::Group(vec![vec![
+                            Element {
+                                atom: Atom::Terminal("hello".to_string()),
+                                modifier: None
+                            },
+                            Element {
+                                atom: Atom::Nonterminal("baz".to_string()),
+                                modifier: None
+                            }
+                        ]]),
+                        modifier: None
+                    },
+                    Element {
+                        atom: Atom::Terminal("world".to_string()),
+                        modifier: None
+                    },
+                    Element {
+                        atom: Atom::Nonterminal("buz".to_string()),
+                        modifier: None
+                    }
                 ],
                 vec![
-                    Element::Terminal("honk".to_string()),
-                    Element::Nonterminal("bonk".to_string()),
-                    Element::Group(vec![vec![
-                        Element::Nonterminal("tonk".to_string()),
-                        Element::Terminal("shonk".to_string()),
-                        Element::Nonterminal("donk".to_string())
-                    ]]),
-                    Element::Terminal("lonk".to_string())
+                    Element {
+                        atom: Atom::Terminal("honk".to_string()),
+                        modifier: None
+                    },
+                    Element {
+                        atom: Atom::Nonterminal("bonk".to_string()),
+                        modifier: None
+                    },
+                    Element {
+                        atom: Atom::Group(vec![vec![
+                            Element {
+                                atom: Atom::Nonterminal("tonk".to_string()),
+                                modifier: None
+                            },
+                            Element {
+                                atom: Atom::Terminal("shonk".to_string()),
+                                modifier: None
+                            },
+                            Element {
+                                atom: Atom::Nonterminal("donk".to_string()),
+                                modifier: None
+                            }
+                        ]]),
+                        modifier: None
+                    },
+                    Element {
+                        atom: Atom::Terminal("lonk".to_string()),
+                        modifier: None
+                    }
                 ]
             ]
         );
@@ -200,15 +351,36 @@ mod tests {
         assert_eq!(
             parse_sequence(&mut input).unwrap(),
             vec![vec![
-                Element::Nonterminal("foo".to_string()),
-                Element::Group(vec![vec![
-                    Element::Terminal("bar".to_string()),
-                    Element::Group(vec![vec![
-                        Element::Nonterminal("baz".to_string()),
-                        Element::Terminal("qux".to_string())
-                    ]])
-                ]]),
-                Element::Nonterminal("quux".to_string())
+                Element {
+                    atom: Atom::Nonterminal("foo".to_string()),
+                    modifier: None
+                },
+                Element {
+                    atom: Atom::Group(vec![vec![
+                        Element {
+                            atom: Atom::Terminal("bar".to_string()),
+                            modifier: None
+                        },
+                        Element {
+                            atom: Atom::Group(vec![vec![
+                                Element {
+                                    atom: Atom::Nonterminal("baz".to_string()),
+                                    modifier: None
+                                },
+                                Element {
+                                    atom: Atom::Terminal("qux".to_string()),
+                                    modifier: None
+                                }
+                            ]]),
+                            modifier: None
+                        }
+                    ]]),
+                    modifier: None
+                },
+                Element {
+                    atom: Atom::Nonterminal("quux".to_string()),
+                    modifier: None
+                }
             ]]
         );
 
@@ -216,17 +388,41 @@ mod tests {
         assert_eq!(
             parse_sequence(&mut input2).unwrap(),
             vec![
-                vec![Element::Group(vec![vec![
-                    Element::Nonterminal("a".to_string()),
-                    Element::Group(vec![vec![
-                        Element::Terminal("b".to_string()),
-                        Element::Nonterminal("c".to_string())
-                    ]])
-                ]])],
-                vec![Element::Group(vec![vec![
-                    Element::Nonterminal("d".to_string()),
-                    Element::Terminal("e".to_string())
-                ]])]
+                vec![Element {
+                    atom: Atom::Group(vec![vec![
+                        Element {
+                            atom: Atom::Nonterminal("a".to_string()),
+                            modifier: None
+                        },
+                        Element {
+                            atom: Atom::Group(vec![vec![
+                                Element {
+                                    atom: Atom::Terminal("b".to_string()),
+                                    modifier: None
+                                },
+                                Element {
+                                    atom: Atom::Nonterminal("c".to_string()),
+                                    modifier: None
+                                }
+                            ]]),
+                            modifier: None
+                        }
+                    ]]),
+                    modifier: None
+                }],
+                vec![Element {
+                    atom: Atom::Group(vec![vec![
+                        Element {
+                            atom: Atom::Nonterminal("d".to_string()),
+                            modifier: None
+                        },
+                        Element {
+                            atom: Atom::Terminal("e".to_string()),
+                            modifier: None
+                        }
+                    ]]),
+                    modifier: None
+                }]
             ]
         );
     }
@@ -237,12 +433,27 @@ mod tests {
         assert_eq!(
             parse_sequence(&mut input).unwrap(),
             vec![vec![
-                Element::Nonterminal("foo".to_string()),
-                Element::Group(vec![
-                    vec![Element::Terminal("bar".to_string())],
-                    vec![Element::Terminal("baz".to_string())]
-                ]),
-                Element::Nonterminal("qux".to_string())
+                Element {
+                    atom: Atom::Nonterminal("foo".to_string()),
+                    modifier: None
+                },
+                Element {
+                    atom: Atom::Group(vec![
+                        vec![Element {
+                            atom: Atom::Terminal("bar".to_string()),
+                            modifier: None
+                        }],
+                        vec![Element {
+                            atom: Atom::Terminal("baz".to_string()),
+                            modifier: None
+                        }]
+                    ]),
+                    modifier: None
+                },
+                Element {
+                    atom: Atom::Nonterminal("qux".to_string()),
+                    modifier: None
+                }
             ]]
         );
 
@@ -250,14 +461,32 @@ mod tests {
         assert_eq!(
             parse_sequence(&mut input2).unwrap(),
             vec![vec![
-                Element::Group(vec![
-                    vec![Element::Nonterminal("a".to_string())],
-                    vec![Element::Nonterminal("b".to_string())]
-                ]),
-                Element::Group(vec![
-                    vec![Element::Terminal("c".to_string())],
-                    vec![Element::Terminal("d".to_string())]
-                ])
+                Element {
+                    atom: Atom::Group(vec![
+                        vec![Element {
+                            atom: Atom::Nonterminal("a".to_string()),
+                            modifier: None
+                        }],
+                        vec![Element {
+                            atom: Atom::Nonterminal("b".to_string()),
+                            modifier: None
+                        }]
+                    ]),
+                    modifier: None
+                },
+                Element {
+                    atom: Atom::Group(vec![
+                        vec![Element {
+                            atom: Atom::Terminal("c".to_string()),
+                            modifier: None
+                        }],
+                        vec![Element {
+                            atom: Atom::Terminal("d".to_string()),
+                            modifier: None
+                        }]
+                    ]),
+                    modifier: None
+                }
             ]]
         );
     }
@@ -269,12 +498,24 @@ mod tests {
             parse_sequence(&mut input).unwrap(),
             vec![
                 vec![
-                    Element::Nonterminal("foo".to_string()),
-                    Element::Nonterminal("bar".to_string())
+                    Element {
+                        atom: Atom::Nonterminal("foo".to_string()),
+                        modifier: None
+                    },
+                    Element {
+                        atom: Atom::Nonterminal("bar".to_string()),
+                        modifier: None
+                    }
                 ],
                 vec![
-                    Element::Nonterminal("fizz".to_string()),
-                    Element::Nonterminal("buzz".to_string())
+                    Element {
+                        atom: Atom::Nonterminal("fizz".to_string()),
+                        modifier: None
+                    },
+                    Element {
+                        atom: Atom::Nonterminal("buzz".to_string()),
+                        modifier: None
+                    }
                 ]
             ]
         );
@@ -288,8 +529,14 @@ mod tests {
         assert_eq!(
             result.alternatives,
             vec![
-                vec![Element::Nonterminal("bar".to_string())],
-                vec![Element::Terminal("baz".to_string())]
+                vec![Element {
+                    atom: Atom::Nonterminal("bar".to_string()),
+                    modifier: None
+                }],
+                vec![Element {
+                    atom: Atom::Terminal("baz".to_string()),
+                    modifier: None
+                }]
             ]
         );
     }
@@ -302,15 +549,70 @@ mod tests {
         assert_eq!(result[0].name, "foo");
         assert_eq!(
             result[0].alternatives,
-            vec![vec![Element::Nonterminal("bar".to_string())]]
+            vec![vec![Element {
+                atom: Atom::Nonterminal("bar".to_string()),
+                modifier: None
+            }]]
         );
         assert_eq!(result[1].name, "baz");
         assert_eq!(
             result[1].alternatives,
             vec![
-                vec![Element::Terminal("qux".to_string())],
-                vec![Element::Nonterminal("quux".to_string())]
+                vec![Element {
+                    atom: Atom::Terminal("qux".to_string()),
+                    modifier: None
+                }],
+                vec![Element {
+                    atom: Atom::Nonterminal("quux".to_string()),
+                    modifier: None
+                }]
             ]
+        );
+    }
+
+    #[test]
+    fn test_modifiers() {
+        let mut input = "<foo>? \"bar\"* <baz>+";
+        assert_eq!(
+            parse_sequence(&mut input).unwrap(),
+            vec![vec![
+                Element {
+                    atom: Atom::Nonterminal("foo".to_string()),
+                    modifier: Some(Modifier::Optional)
+                },
+                Element {
+                    atom: Atom::Terminal("bar".to_string()),
+                    modifier: Some(Modifier::ZeroOrMore)
+                },
+                Element {
+                    atom: Atom::Nonterminal("baz".to_string()),
+                    modifier: Some(Modifier::OneOrMore)
+                }
+            ]]
+        );
+
+        let mut input2 = "(<a> | <b>)? \"c\"*";
+        assert_eq!(
+            parse_sequence(&mut input2).unwrap(),
+            vec![vec![
+                Element {
+                    atom: Atom::Group(vec![
+                        vec![Element {
+                            atom: Atom::Nonterminal("a".to_string()),
+                            modifier: None
+                        }],
+                        vec![Element {
+                            atom: Atom::Nonterminal("b".to_string()),
+                            modifier: None
+                        }]
+                    ]),
+                    modifier: Some(Modifier::Optional)
+                },
+                Element {
+                    atom: Atom::Terminal("c".to_string()),
+                    modifier: Some(Modifier::ZeroOrMore)
+                }
+            ]]
         );
     }
 }
