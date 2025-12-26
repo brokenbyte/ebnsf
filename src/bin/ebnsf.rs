@@ -21,6 +21,30 @@ struct Cli {
 }
 
 fn main() {
+    let mut input = r#"
+<foo> <bar> ("hello" <baz>)
+<womp>
+"#.trim_start();
+
+    let p = winnow::v4::parse_sequence(&mut input).unwrap();
+    // let p = winnow::list2(&mut input).unwrap();
+    dbg!(p);
+    dbg!(input);
+
+    /*
+     *     let ebnf = r#"<valid semver> ::= <version core>
+     *                   <version core> "-" <pre-release>
+     *                  | <version core> "+" <build>
+     *                  | <version core> "-" <pre-release> "+" <build>
+     * "#;
+     *     let diagram = match parse_ebnf(ebnf) {
+     *         Ok(p) => p,
+     *         Err(e) => {
+     *             println!("{e}");
+     *             std::process::exit(1);
+     *         }
+     *     };
+     */
     // test_term();
 
     // test_group();
@@ -31,134 +55,137 @@ fn main() {
 
     // test_sequence_list();
 
-    test_grammar();
+    // test_grammar();
+}
 
+fn test_sequence() {
     /*
-     *     let cli = Cli::parse();
-     *
-     *     let ebnf = std::fs::read_to_string(&cli.input).unwrap();
-     *
-     *     let grammar = winnow::rules.parse_next(&mut ebnf.as_str()).unwrap();
-     *     dbg!(grammar);
+     * let mut input = r#""hello" "world" | "foo" "bar" ("fizz", "buzz") "#;
+     *  println!("input is: \n&{}&", input);
+     *  let x = winnow::sequence(&mut input).unwrap();
+     *  println!("input is: &{}&", input);
+     *  println!("x is:     {:#?}", x);
      */
 
     /*
-     *     let diagram = render_grammar(&grammar);
-     *
-     *     std::fs::write("bnf_winnow.svg", diagram.to_string().into_bytes()).unwrap();
+     * let mut input = r#"<world> ("hello")
+     * "#;
+     * println!("input is: \n&{}&", input);
+     * let x = winnow::sequence(&mut input).unwrap();
+     * println!("input is: &{}&", input);
+     * println!("x is:     {:#?}", x);
      */
 }
 
 pub type DynNode = Box<dyn rr::Node>;
 
-fn render_grammar(ebnf: &EbnfGrammar) -> rr::Diagram<DynNode> {
-    let nodes = ebnf
-        .rules
-        .iter()
-        .map(|r| {
-            Box::new(rr::Sequence::new(vec![
-                Box::new(rr::SimpleStart) as DynNode,
-                render_rule(r),
-                Box::new(rr::SimpleStart),
-            ]))
-        })
-        .collect::<Vec<_>>();
+/*
+ * fn render_grammar(ebnf: &EbnfGrammar) -> rr::Diagram<DynNode> {
+ *     let nodes = ebnf
+ *         .rules
+ *         .iter()
+ *         .map(|r| {
+ *             Box::new(rr::Sequence::new(vec![
+ *                 Box::new(rr::SimpleStart) as DynNode,
+ *                 render_rule(r),
+ *                 Box::new(rr::SimpleStart),
+ *             ]))
+ *         })
+ *         .collect::<Vec<_>>();
+ *
+ *     let mut diagram = rr::Diagram::new(Box::new(rr::VerticalGrid::new(nodes)) as DynNode);
+ *     diagram.add_css(rr::DEFAULT_CSS);
+ *
+ *     diagram
+ * }
+ */
 
-    let mut diagram = rr::Diagram::new(Box::new(rr::VerticalGrid::new(nodes)) as DynNode);
-    diagram.add_css(rr::DEFAULT_CSS);
+/*
+ * fn render_rule(rule: &winnow::Rule) -> DynNode {
+ *     let name = Box::new(rr::Comment::new(unescape(&rule.name))) as DynNode;
+ *     let mut choices = rule
+ *         .choices
+ *         .iter() // Each arm of the rule, e.g. <foo> | <bar>
+ *         .map(|choice| {
+ *             let items = choice;
+ *             items
+ *                 .iter() // Each node in the current rule
+ *                 .map(|item| render_sequence_item(item))
+ *                 .collect::<Vec<_>>()
+ *         })
+ *         .collect::<Vec<_>>();
+ *
+ *     if choices.len() == 1 {
+ *         // Only one choice/production for the rule
+ *         let definition = choices.remove(0);
+ *
+ *         let mut rule = Vec::with_capacity(1 + definition.len());
+ *         rule.insert(0, name);
+ *         rule.extend(definition);
+ *
+ *         Box::new(rr::Sequence::new(rule))
+ *     } else {
+ *         // Multiple choices/productions for the rule
+ *         let productions = choices
+ *             .into_iter()
+ *             .map(rr::Sequence::new)
+ *             .collect::<Vec<_>>();
+ *
+ *         let definitino = Box::new(rr::Choice::new(productions));
+ *
+ *         Box::new(rr::Sequence::new(vec![name, definitino]))
+ *     }
+ *
+ * }
+ */
 
-    diagram
-}
+/*
+ * fn render_sequence_item(seq_item: &winnow::SequenceItem) -> DynNode {
+ *     match seq_item {
+ *         winnow::SequenceItem::Term(term) => render_term(term),
+ *         winnow::SequenceItem::Group(group) => render_group(group),
+ *     }
+ * }
+ */
 
-fn render_rule(rule: &winnow::Rule) -> DynNode {
-    let name = Box::new(rr::Comment::new(unescape(&rule.name))) as DynNode;
-    let mut choices = rule
-        .choices
-        .iter() // Each arm of the rule, e.g. <foo> | <bar>
-        .map(|choice| {
-            let items = choice;
-            items
-                .iter() // Each node in the current rule
-                .map(|item| render_sequence_item(item))
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
+/*
+ * fn render_group(group: &winnow::Group) -> DynNode {
+ *     let items = group
+ *         .items
+ *         .iter()
+ *         .map(render_sequence_item)
+ *         .collect::<Vec<_>>();
+ *
+ *     let s = Box::new(rr::Sequence::new(items));
+ *
+ *     render_modifier(s, &group.modifier)
+ * }
+ *
+ */
+/*
+ * fn render_modifier(node: DynNode, modifier: &Option<winnow::Modifier>) -> DynNode {
+ *     if let Some(m) = modifier {
+ *         match m {
+ *             winnow::Modifier::QMark => Box::new(rr::Optional::new(node)),
+ *             winnow::Modifier::Plus => Box::new(rr::Repeat::new(node, rr::Empty)),
+ *             winnow::Modifier::Star => Box::new(rr::Optional::new(rr::Repeat::new(node, rr::Empty))),
+ *         }
+ *     } else {
+ *         node
+ *     }
+ * }
+ */
 
-    if choices.len() == 1 {
-        // Only one choice/production for the rule
-        let definition = choices.remove(0);
-
-        let mut rule = Vec::with_capacity(1 + definition.len());
-        rule.insert(0, name);
-        rule.extend(definition);
-
-        Box::new(rr::Sequence::new(rule))
-    } else {
-        // Multiple choices/productions for the rule
-        let productions = choices
-            .into_iter()
-            .map(rr::Sequence::new)
-            .collect::<Vec<_>>();
-
-        let definitino = Box::new(rr::Choice::new(productions));
-
-        Box::new(rr::Sequence::new(vec![name, definitino]))
-    }
-
-    /*
-     *             if rule_def.len() == 1 {
-     *                 let mut node = rule_def.remove(0);
-     *                 Box::new(rr::Sequence::new(vec![name, node]))
-     *             } else {
-     *                 let x = vec![name, Box::new(rr::Choice::new(rule_def))];
-     *
-     *                 Box::new(rr::Sequence::new(x))
-     *             }
-     *     todo!()
-     */
-
-    //
-}
-
-fn render_sequence_item(seq_item: &winnow::SequenceItem) -> DynNode {
-    match seq_item {
-        winnow::SequenceItem::Term(term) => render_term(term),
-        winnow::SequenceItem::Group(group) => render_group(group),
-    }
-}
-
-fn render_group(group: &winnow::Group) -> DynNode {
-    let items = group
-        .items
-        .iter()
-        .map(render_sequence_item)
-        .collect::<Vec<_>>();
-
-    let s = Box::new(rr::Sequence::new(items));
-
-    render_modifier(s, &group.modifier)
-}
-
-fn render_modifier(node: DynNode, modifier: &Option<winnow::Modifier>) -> DynNode {
-    if let Some(m) = modifier {
-        match m {
-            winnow::Modifier::QMark => Box::new(rr::Optional::new(node)),
-            winnow::Modifier::Plus => Box::new(rr::Repeat::new(node, rr::Empty)),
-            winnow::Modifier::Star => Box::new(rr::Optional::new(rr::Repeat::new(node, rr::Empty))),
-        }
-    } else {
-        node
-    }
-}
-
-fn render_term(term: &winnow::Term) -> DynNode {
-    let atom: DynNode = match &term.atom {
-        winnow::Token::Terminal(s) => Box::new(rr::Terminal::new(unescape(s))),
-        winnow::Token::NonTerminal(s) => Box::new(rr::NonTerminal::new(unescape(s))),
-    };
-
-    render_modifier(atom, &term.modifier)
-}
+/*
+ * fn render_term(term: &winnow::Term) -> DynNode {
+ *     let atom: DynNode = match &term.atom {
+ *         winnow::Token::Terminal(s) => Box::new(rr::Terminal::new(unescape(s))),
+ *         winnow::Token::NonTerminal(s) => Box::new(rr::NonTerminal::new(unescape(s))),
+ *     };
+ *
+ *     render_modifier(atom, &term.modifier)
+ * }
+ */
 fn unescape(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut iter = s.chars();
@@ -182,24 +209,20 @@ fn unescape(s: &str) -> String {
 }
 
 fn test_grammar() {
-    let mut input = "\
-<syntax> ::= <rule>
-<syntax> ::= <rule>
-<syntax> ::= <rule>
-<syntax> ::= <rule>
-
-";
-/*
- * 
- * let mut input = "\
- * <syntax>         ::= <rule>+
- * 
- * 
- * <rule>           ::= <opt_whitespace> \"<\" <rule_name> \">\" <opt_whitespace> \"::=\" <opt_whitespace> <group> <line_end>
- * ";
- */
-    let x = winnow::rules.parse(&mut input).unwrap();
-    dbg!(x);
+    // let mut input = "<syntax> ::= <rule>\n";
+    /*
+     *
+     * let mut input = "\
+     * <syntax>         ::= <rule>+
+     *
+     *
+     * <rule>           ::= <opt_whitespace> \"<\" <rule_name> \">\" <opt_whitespace> \"::=\" <opt_whitespace> <group> <line_end>
+     * ";
+     */
+    /*
+     * let x = winnow::rules.parse(input).unwrap();
+     * dbg!(x);
+     */
 
     /*
      * for r in &x.rules {
@@ -211,113 +234,105 @@ fn test_grammar() {
 }
 
 // rule = { nonterminal ~ "::=" ~ sequence_list ~ NEWLINE*}
-fn test_rule() {
-    let mut input = "\
-<rule> ::= <foo>
-        | (<foo> | <bar>)
-        | (
-                <fizz>
-              | (\"foo\" | \"bar\")
-          )
-";
-    println!("input is: \n&{}&", input);
-    let x = winnow::rule(&mut input).unwrap();
-
-    println!("input is: &{}&", input);
-    println!("x is:     {}", x);
-}
+/*
+ * fn test_rule() {
+ *     let mut input = "\
+ * <rule> ::= <foo>
+ *         | (<foo> | <bar>)
+ *         | (
+ *                 <fizz>
+ *               | (\"foo\" | \"bar\")
+ *           )
+ * ";
+ *     println!("input is: \n&{}&", input);
+ *     let x = winnow::rule(&mut input).unwrap();
+ *
+ *     println!("input is: &{}&", input);
+ *     println!("x is:     {}", x);
+ * }
+ */
 
 // sequence_list = { sequence ~ ( "\n"* ~ "|" ~ "\n"* ~ sequence )* }
-fn test_sequence_list() {
-    let mut input = r#""hello" "world" | "foo" "bar" ("fizz", "buzz") "#;
-    let mut input = "\
-<rule> ::= <foo>
-        | (<foo> | <bar>)
-        | (
-                <fizz>
-              | (\"foo\" | \"bar\")
-          )
-";
-    println!("input is: \n&{}&", input);
-    let x = winnow::sequence_list(&mut input).unwrap();
-    println!("input is: &{}&", input);
-    for i in &x {
-        println!("{i}")
-    }
-    // println!("x is:     {:#?}", x);
-}
-
-fn test_sequence() {
-    /*
-     * let mut input = r#""hello" "world" | "foo" "bar" ("fizz", "buzz") "#;
-     *  println!("input is: \n&{}&", input);
-     *  let x = winnow::sequence(&mut input).unwrap();
-     *  println!("input is: &{}&", input);
-     *  println!("x is:     {:#?}", x);
-     */
-
-    let mut input = r#"<world> ("hello")"#;
-    println!("input is: \n&{}&", input);
-    let x = winnow::sequence(&mut input).unwrap();
-    println!("input is: &{}&", input);
-    println!("x is:     {:#?}", x);
-}
+/*
+ * fn test_sequence_list() {
+ *     let mut input = r#""hello" "world" | "foo" "bar" ("fizz", "buzz") "#;
+ *     let mut input = "\
+ * <rule> ::= <foo>
+ *         | (<foo> | <bar>)
+ *         | (
+ *                 <fizz>
+ *               | (\"foo\" | \"bar\")
+ *           )
+ * ";
+ *     println!("input is: \n&{}&", input);
+ *     let x = winnow::sequence_list(&mut input).unwrap();
+ *     println!("input is: &{}&", input);
+ *     for i in &x {
+ *         println!("{i}")
+ *     }
+ *     // println!("x is:     {:#?}", x);
+ * }
+ */
 
 // group = { "(" ~ NEWLINE* ~ (sequence_list) ~ NEWLINE* ~ ")" ~ opt_modifier}
-fn test_group() {
-    let mut input = r#"("hello" |
-    "world" "womp"
-    )"#;
-    println!("input is: \n&{}&", input);
-    let x = winnow::group(&mut input).unwrap();
-    println!("input is: &{}&", input);
-    println!("x is:     {x}");
-}
+/*
+ * fn test_group() {
+ *     let mut input = r#"("hello" |
+ *     "world" "womp"
+ *     )"#;
+ *     println!("input is: \n&{}&", input);
+ *     let x = winnow::group(&mut input).unwrap();
+ *     println!("input is: &{}&", input);
+ *     println!("x is:     {x}");
+ * }
+ */
 
 // term = { (literal | nonterminal) ~ opt_modifier}
-fn test_term() {
-    let mut input = r#""hello""#;
-    println!("input is: \n&{}&", input);
-    let x = winnow::term(&mut input);
-    println!("input is: &{}&", input);
-    println!("x is:     {:?}", x);
-
-    let mut input = r#""hello"+"#;
-    println!("input is: \n&{}&", input);
-    let x = winnow::term(&mut input);
-    println!("input is: &{}&", input);
-    println!("x is:     {:?}", x);
-
-    let mut input = r#""hello"?"#;
-    println!("input is: \n&{}&", input);
-    let x = winnow::term(&mut input);
-    println!("input is: &{}&", input);
-    println!("x is:     {:?}", x);
-
-    let mut input = r#""hello"*"#;
-    println!("input is: \n&{}&", input);
-    let x = winnow::term(&mut input);
-    println!("input is: &{}&", input);
-    println!("x is:     {:?}", x);
-
-    let mut input = r#"<hello>+"#;
-    println!("input is: \n&{}&", input);
-    let x = winnow::term(&mut input);
-    println!("input is: &{}&", input);
-    println!("x is:     {:?}", x);
-
-    let mut input = r#"<hello>?"#;
-    println!("input is: \n&{}&", input);
-    let x = winnow::term(&mut input);
-    println!("input is: &{}&", input);
-    println!("x is:     {:?}", x);
-
-    let mut input = r#"<hello>*"#;
-    println!("input is: \n&{}&", input);
-    let x = winnow::term(&mut input);
-    println!("input is: &{}&", input);
-    println!("x is:     {:?}", x);
-}
+/*
+ * fn test_term() {
+ *     let mut input = r#""hello""#;
+ *     println!("input is: \n&{}&", input);
+ *     let x = winnow::term(&mut input);
+ *     println!("input is: &{}&", input);
+ *     println!("x is:     {:?}", x);
+ *
+ *     let mut input = r#""hello"+"#;
+ *     println!("input is: \n&{}&", input);
+ *     let x = winnow::term(&mut input);
+ *     println!("input is: &{}&", input);
+ *     println!("x is:     {:?}", x);
+ *
+ *     let mut input = r#""hello"?"#;
+ *     println!("input is: \n&{}&", input);
+ *     let x = winnow::term(&mut input);
+ *     println!("input is: &{}&", input);
+ *     println!("x is:     {:?}", x);
+ *
+ *     let mut input = r#""hello"*"#;
+ *     println!("input is: \n&{}&", input);
+ *     let x = winnow::term(&mut input);
+ *     println!("input is: &{}&", input);
+ *     println!("x is:     {:?}", x);
+ *
+ *     let mut input = r#"<hello>+"#;
+ *     println!("input is: \n&{}&", input);
+ *     let x = winnow::term(&mut input);
+ *     println!("input is: &{}&", input);
+ *     println!("x is:     {:?}", x);
+ *
+ *     let mut input = r#"<hello>?"#;
+ *     println!("input is: \n&{}&", input);
+ *     let x = winnow::term(&mut input);
+ *     println!("input is: &{}&", input);
+ *     println!("x is:     {:?}", x);
+ *
+ *     let mut input = r#"<hello>*"#;
+ *     println!("input is: \n&{}&", input);
+ *     let x = winnow::term(&mut input);
+ *     println!("input is: &{}&", input);
+ *     println!("x is:     {:?}", x);
+ * }
+ */
 
 fn main2() {
     let cli = Cli::parse();
