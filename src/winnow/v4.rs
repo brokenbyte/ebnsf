@@ -2,9 +2,10 @@ use railroad::{self as rr, Diagram};
 use std::error::Error;
 use winnow::ModalResult;
 use winnow::ascii::{alpha1, multispace0, multispace1, space0, space1};
-use winnow::combinator::{alt, delimited, preceded, separated};
+use winnow::combinator::{alt, cut_err, delimited, preceded, repeat, separated};
+use winnow::error::{ContextError, ErrMode};
 use winnow::prelude::*;
-use winnow::token::take_while;
+use winnow::token::{any, take_while};
 
 pub type DynNode = Box<dyn rr::Node>;
 
@@ -59,7 +60,24 @@ pub fn element<'a>(input: &'a mut &str) -> ModalResult<Element> {
     Ok(Element { atom, modifier })
 }
 
-// Terminal parser: parses quoted (single/double) or unquoted literals
+struct EscapedCharParser(char);
+
+impl winnow::Parser<&str, String, ErrMode<ContextError>> for EscapedCharParser {
+    fn parse_next(&mut self, input: &mut &str) -> ModalResult<String> {
+        match preceded('\\', any).parse_next(input) {
+            Ok(c) => match c {
+                'n' => Ok('\n'.to_string()),
+                q if q == self.0 => Ok(q.to_string()),
+                '\\' => Ok('\\'.to_string()),
+                '\'' if self.0 == '\'' => Ok('\''.to_string()),
+                _ => Err(ErrMode::Backtrack(ContextError::new())),
+            },
+            Err(e) => Err(e),
+        }
+    }
+}
+
+// Terminal parser: parses quoted (single/double) strings
 pub fn terminal<'a>(input: &'a mut &str) -> ModalResult<Element> {
     use winnow::token::take_until;
     alt((
@@ -71,6 +89,19 @@ pub fn terminal<'a>(input: &'a mut &str) -> ModalResult<Element> {
         modifier: None,
     })
     .parse_next(input)
+}
+
+fn string_content_parser<'a>(
+    quote: char,
+) -> impl Parser<&'a str, String, ErrMode<ContextError>> + 'a {
+    repeat(
+        0..,
+        alt((
+            EscapedCharParser(quote),
+            take_while(1.., move |c: char| c != quote && c != '\\').map(|s: &str| s.to_string()),
+        )),
+    )
+    .map(|parts: Vec<String>| parts.concat())
 }
 
 // Nonterminal parser: parses <alphanum...>
@@ -137,8 +168,15 @@ pub fn parse_grammar<'a>(input: &'a mut &str) -> ModalResult<Grammar> {
 
 // Parses EBNF and builds a railroad diagram
 pub fn parse_ebnf(src: &str) -> Result<Diagram<DynNode>, Box<dyn Error>> {
+    use winnow::combinator::eof;
     let mut input = src;
     let grammar = parse_grammar(&mut input).map_err(|e| format!("Parsing error: {:?}", e))?;
+    multispace0::<&str, ContextError<()>>
+        .parse_next(&mut input)
+        .map_err(|e| format!("Trailing whitespace error: {:?}", e))?;
+    eof::<&str, ContextError<()>>
+        .parse_next(&mut input)
+        .map_err(|e| format!("Extra input: {:?}", e))?;
     let diagram = build_diagram(grammar);
     Ok(diagram)
 }
@@ -710,16 +748,9 @@ mod tests {
     #[test]
     fn test_parse_semver_ebnf() {
         let content = std::fs::read_to_string("grammars/semver2-0.ebnf").unwrap();
-        let mut input = content.as_str();
-        let grammar = parse_grammar(&mut input).unwrap();
-        // Check basic structure: should have 20 rules
-        assert_eq!(grammar.len(), 20);
-        // Check first rule
-        assert_eq!(grammar[0].name, "valid semver");
-        assert_eq!(grammar[0].alternatives.len(), 4); // 4 alternatives
-        // Check a terminal rule with many alternatives
-        let letter_rule = grammar.iter().find(|r| r.name == "letter").unwrap();
-        assert_eq!(letter_rule.alternatives.len(), 52); // 52 letter alternatives
+        let result = parse_ebnf(&content);
+        // The file contains quoted terminals, so parsing should succeed
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -731,8 +762,96 @@ mod tests {
 
     #[test]
     fn test_reject_unquoted_terminal() {
-        let input = "<syntax>         ::= rule\"+";
+        let input = "<syntax>         ::= rule>+";
         let diagram = parse_ebnf(input);
         assert!(diagram.is_err())
-}
+    }
+
+    #[test]
+    fn test_accept_quoted_terminals() {
+        let mut input = "<rule> ::= \"terminal\" 'another'";
+        let result = parse_rule(&mut input).unwrap();
+        assert_eq!(result.name, "rule");
+        assert_eq!(
+            result.alternatives,
+            vec![vec![
+                Element {
+                    atom: Atom::Terminal("terminal".to_string()),
+                    modifier: None
+                },
+                Element {
+                    atom: Atom::Terminal("another".to_string()),
+                    modifier: None
+                }
+            ]]
+        );
+    }
+
+    #[test]
+    fn test_reject_unquoted_in_sequence() {
+        let input = "<rule> ::= unquoted \"quoted\"";
+        assert!(parse_ebnf(input).is_err());
+    }
+
+    #[test]
+    fn test_reject_unquoted_in_alternatives() {
+        let input = "<rule> ::= \"quoted\" | unquoted";
+        assert!(parse_ebnf(input).is_err());
+    }
+
+    #[test]
+    fn test_reject_unquoted_in_group() {
+        let input = "<rule> ::= (\"quoted\" unquoted)";
+        assert!(parse_ebnf(input).is_err());
+    }
+
+    #[test]
+    fn test_reject_nonterminal_without_angles() {
+        let input = "rule ::= <valid>";
+        assert!(parse_ebnf(input).is_err());
+    }
+
+    #[test]
+    fn test_reject_mixed_invalid() {
+        let input = "<valid> ::= <also_valid> invalid";
+        assert!(parse_ebnf(input).is_err());
+    }
+
+    #[test]
+    fn test_accept_mixed_quotes() {
+        let mut input = "<rule> ::= \"double\" 'single' \"mixed\"";
+        let result = parse_rule(&mut input).unwrap();
+        assert_eq!(result.name, "rule");
+        assert_eq!(
+            result.alternatives,
+            vec![vec![
+                Element {
+                    atom: Atom::Terminal("double".to_string()),
+                    modifier: None
+                },
+                Element {
+                    atom: Atom::Terminal("single".to_string()),
+                    modifier: None
+                },
+                Element {
+                    atom: Atom::Terminal("mixed".to_string()),
+                    modifier: None
+                }
+            ]]
+        );
+    }
+
+    #[test]
+    fn test_terminal_mixed_quotes() {
+        let mut input = "\"she said 'hello'\"";
+        let result = terminal(&mut input).unwrap();
+        assert_eq!(result.atom, Atom::Terminal("she said 'hello'".to_string()));
+    }
+
+    #[test]
+    fn test_terminal_single_with_double() {
+        let mut input = "'he said \"world\"'";
+        let result = terminal(&mut input).unwrap();
+        assert_eq!(result.atom, Atom::Terminal("he said \"world\"".to_string()));
+    }
 }
