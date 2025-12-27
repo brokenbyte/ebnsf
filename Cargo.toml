@@ -9,6 +9,7 @@ readme = "README.md"
 exclude = ["grammars/*", "doc/*"]
 
 [dependencies]
+annotate-snippets = "0.12"
 clap = { version = "4.5.31", features = ["derive"] }
 pest = "2.7.15"
 pest_derive = "2.7.15"

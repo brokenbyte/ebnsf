@@ -1,9 +1,10 @@
 use railroad::{self as rr, Diagram};
+
 use std::error::Error;
 use winnow::ModalResult;
 use winnow::ascii::{alpha1, multispace0, multispace1, space0, space1};
 use winnow::combinator::{alt, delimited, preceded, separated};
-use winnow::error::ContextError;
+use winnow::error::{ContextError, ErrMode};
 use winnow::prelude::*;
 use winnow::token::take_while;
 
@@ -132,23 +133,40 @@ pub fn parse_rule(input: &mut &str) -> ModalResult<Rule> {
 
 // Parses multiple rules separated by whitespace/newlines
 pub fn parse_grammar(input: &mut &str) -> ModalResult<Grammar> {
-    (multispace0).void().parse_next(input)?; // Skip leading whitespace
     separated(1.., parse_rule, multispace1).parse_next(input)
 }
 
 // Parses EBNF and builds a railroad diagram
 pub fn parse_ebnf(src: &str) -> Result<Diagram<DynNode>, Box<dyn Error>> {
     use winnow::combinator::eof;
+    let original_input = src;
     let mut input = src;
-    let grammar = parse_grammar(&mut input).map_err(|e| format!("Parsing error: {:?}", e))?;
-    multispace0::<&str, ContextError<()>>
+    let grammar = parse_grammar(&mut input).map_err(|e| format_error(original_input, input, e))?;
+    multispace0::<&str, ErrMode<ContextError>>
         .parse_next(&mut input)
-        .map_err(|e| format!("Trailing whitespace error: {:?}", e))?;
-    eof::<&str, ContextError<()>>
+        .map_err(|e| format_error(original_input, input, e))?;
+    eof::<&str, ErrMode<ContextError>>
         .parse_next(&mut input)
-        .map_err(|e| format!("Extra input: {:?}", e))?;
+        .map_err(|e| format_error(original_input, input, e))?;
     let diagram = build_diagram(grammar);
     Ok(diagram)
+}
+
+fn format_error(source: &str, remaining: &str, _err: ErrMode<ContextError>) -> Box<dyn Error> {
+    let consumed_len = source.len() - remaining.len();
+    let consumed = &source[..consumed_len];
+    let line = consumed.chars().filter(|&c| c == '\n').count() + 1;
+    let last_newline = consumed.rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let column = consumed[last_newline..].chars().count();
+
+    let source_line = source.lines().nth(line - 1).unwrap_or("");
+
+    let caret_line = format!("  |{}{}", " ".repeat(column.saturating_sub(1)), "^");
+    format!(
+        "error: Parse Error\n --> \n  |\n{} | {}\n{}\n  = parse error",
+        line, source_line, caret_line
+    )
+    .into()
 }
 
 fn build_diagram(grammar: Grammar) -> Diagram<DynNode> {
