@@ -65,16 +65,6 @@ pub fn terminal<'a>(input: &'a mut &str) -> ModalResult<Element> {
     alt((
         delimited('"', take_until(1.., '"'), '"'),
         delimited('\'', take_until(1.., '\''), '\''),
-        take_while(1.., |c: char| {
-            !c.is_whitespace()
-                && c != '|'
-                && c != '('
-                && c != ')'
-                && c != '<'
-                && c != '>'
-                && c != ':'
-                && c != '='
-        }),
     ))
     .map(|content: &str| Element {
         atom: Atom::Terminal(content.to_string()),
@@ -731,4 +721,18 @@ mod tests {
         let letter_rule = grammar.iter().find(|r| r.name == "letter").unwrap();
         assert_eq!(letter_rule.alternatives.len(), 52); // 52 letter alternatives
     }
+
+    #[test]
+    fn test_reject_unquoted_nonterminal() {
+        let input = "<syntax>         ::= rule>+";
+        let diagram = parse_ebnf(input);
+        assert!(diagram.is_err())
+    }
+
+    #[test]
+    fn test_reject_unquoted_terminal() {
+        let input = "<syntax>         ::= rule\"+";
+        let diagram = parse_ebnf(input);
+        assert!(diagram.is_err())
+}
 }
