@@ -1,4 +1,4 @@
-use ebnsf::parse_ebnf;
+use ebnsf::winnow::v4::parse_ebnf;
 
 mod common;
 use common::save_svg;

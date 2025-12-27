@@ -1,6 +1,6 @@
 mod common;
 use common::save_svg;
-use ebnsf::parse_ebnf;
+use ebnsf::winnow::v4::parse_ebnf;
 
 #[test]
 fn grammars() {
