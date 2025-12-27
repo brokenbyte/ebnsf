@@ -1,8 +1,4 @@
-#![allow(unused, clippy::all)]
-
 pub mod winnow;
-
-use std::path::PathBuf;
 
 use pest::{Parser, iterators::Pair};
 use pest_derive::Parser;
@@ -50,7 +46,7 @@ fn make_node(pair: Pair<'_, Rule>) -> Box<dyn rr::Node> {
             let mut rule_def = expr.map(make_node).collect::<Vec<_>>();
 
             if rule_def.len() == 1 {
-                let mut node = rule_def.remove(0);
+                let node = rule_def.remove(0);
                 Box::new(rr::Sequence::new(vec![name, node]))
             } else {
                 let x = vec![name, Box::new(rr::Choice::new(rule_def))];

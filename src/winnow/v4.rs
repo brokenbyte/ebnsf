@@ -2,10 +2,10 @@ use railroad::{self as rr, Diagram};
 use std::error::Error;
 use winnow::ModalResult;
 use winnow::ascii::{alpha1, multispace0, multispace1, space0, space1};
-use winnow::combinator::{alt, cut_err, delimited, preceded, repeat, separated};
-use winnow::error::{ContextError, ErrMode};
+use winnow::combinator::{alt, delimited, preceded, separated};
+use winnow::error::ContextError;
 use winnow::prelude::*;
-use winnow::token::{any, take_while};
+use winnow::token::take_while;
 
 pub type DynNode = Box<dyn rr::Node>;
 
@@ -42,7 +42,7 @@ pub struct Rule {
 pub type Grammar = Vec<Rule>;
 
 // Modifier parser: parses ?, *, + (optional, at most one)
-pub fn modifier<'a>(input: &'a mut &str) -> ModalResult<Option<Modifier>> {
+pub fn modifier(input: &mut &str) -> ModalResult<Option<Modifier>> {
     use winnow::combinator::opt;
     use winnow::token::one_of;
     opt(one_of(['?', '*', '+']).map(|c| match c {
@@ -55,30 +55,13 @@ pub fn modifier<'a>(input: &'a mut &str) -> ModalResult<Option<Modifier>> {
 }
 
 // Element parser: combines atom with optional modifier
-pub fn element<'a>(input: &'a mut &str) -> ModalResult<Element> {
+pub fn element(input: &mut &str) -> ModalResult<Element> {
     let (atom, modifier) = (atom, modifier).parse_next(input)?;
     Ok(Element { atom, modifier })
 }
 
-struct EscapedCharParser(char);
-
-impl winnow::Parser<&str, String, ErrMode<ContextError>> for EscapedCharParser {
-    fn parse_next(&mut self, input: &mut &str) -> ModalResult<String> {
-        match preceded('\\', any).parse_next(input) {
-            Ok(c) => match c {
-                'n' => Ok('\n'.to_string()),
-                q if q == self.0 => Ok(q.to_string()),
-                '\\' => Ok('\\'.to_string()),
-                '\'' if self.0 == '\'' => Ok('\''.to_string()),
-                _ => Err(ErrMode::Backtrack(ContextError::new())),
-            },
-            Err(e) => Err(e),
-        }
-    }
-}
-
 // Terminal parser: parses quoted (single/double) strings
-pub fn terminal<'a>(input: &'a mut &str) -> ModalResult<Element> {
+pub fn terminal(input: &mut &str) -> ModalResult<Element> {
     use winnow::token::take_until;
     alt((
         delimited('"', take_until(1.., '"'), '"'),
@@ -91,21 +74,8 @@ pub fn terminal<'a>(input: &'a mut &str) -> ModalResult<Element> {
     .parse_next(input)
 }
 
-fn string_content_parser<'a>(
-    quote: char,
-) -> impl Parser<&'a str, String, ErrMode<ContextError>> + 'a {
-    repeat(
-        0..,
-        alt((
-            EscapedCharParser(quote),
-            take_while(1.., move |c: char| c != quote && c != '\\').map(|s: &str| s.to_string()),
-        )),
-    )
-    .map(|parts: Vec<String>| parts.concat())
-}
-
 // Nonterminal parser: parses <alphanum...>
-pub fn nonterminal<'a>(input: &'a mut &str) -> ModalResult<Element> {
+pub fn nonterminal(input: &mut &str) -> ModalResult<Element> {
     use winnow::token::take_until;
     delimited('<', take_until(1.., '>'), '>')
         .map(|content: &str| Element {
@@ -116,7 +86,7 @@ pub fn nonterminal<'a>(input: &'a mut &str) -> ModalResult<Element> {
 }
 
 // Atom parser: chooses between terminal, nonterminal, or group
-pub fn atom<'a>(input: &'a mut &str) -> ModalResult<Atom> {
+pub fn atom(input: &mut &str) -> ModalResult<Atom> {
     alt((
         terminal.map(|e| e.atom),
         nonterminal.map(|e| e.atom),
@@ -126,24 +96,24 @@ pub fn atom<'a>(input: &'a mut &str) -> ModalResult<Atom> {
 }
 
 // Sequence parser: space-separated list of elements
-pub fn sequence<'a>(input: &'a mut &str) -> ModalResult<Sequence> {
+pub fn sequence(input: &mut &str) -> ModalResult<Sequence> {
     (multispace0).void().parse_next(input)?;
     separated(1.., element, space1).parse_next(input)
 }
 
 // Top-level parser: trims whitespace and parses sequences separated by |
-pub fn parse_sequence<'a>(input: &'a mut &str) -> ModalResult<Alternative> {
+pub fn parse_sequence(input: &mut &str) -> ModalResult<Alternative> {
     (multispace0).void().parse_next(input)?; // Skip leading whitespace
     separated(1.., sequence, delimited(multispace0, "|", multispace0)).parse_next(input)
 }
 
 // Group parser: parses (sequence) recursively, supporting alternatives
-pub fn group<'a>(input: &'a mut &str) -> ModalResult<Alternative> {
+pub fn group(input: &mut &str) -> ModalResult<Alternative> {
     delimited('(', parse_sequence, ')').parse_next(input)
 }
 
 // Parses a single rule: <rule_name> ::= <alternatives>
-pub fn parse_rule<'a>(input: &'a mut &str) -> ModalResult<Rule> {
+pub fn parse_rule(input: &mut &str) -> ModalResult<Rule> {
     (multispace0).void().parse_next(input)?; // Skip leading whitespace
     let (name_elem, alts) = (
         nonterminal,
@@ -161,7 +131,7 @@ pub fn parse_rule<'a>(input: &'a mut &str) -> ModalResult<Rule> {
 }
 
 // Parses multiple rules separated by whitespace/newlines
-pub fn parse_grammar<'a>(input: &'a mut &str) -> ModalResult<Grammar> {
+pub fn parse_grammar(input: &mut &str) -> ModalResult<Grammar> {
     (multispace0).void().parse_next(input)?; // Skip leading whitespace
     separated(1.., parse_rule, multispace1).parse_next(input)
 }
@@ -202,11 +172,7 @@ fn build_rule(rule: &Rule) -> DynNode {
     let name = Box::new(rr::Comment::new(rule.name.clone())) as DynNode;
     let alt_node = build_alternative(&rule.alternatives);
 
-    if rule.alternatives.len() == 1 {
-        Box::new(rr::Sequence::new(vec![name, alt_node]))
-    } else {
-        Box::new(rr::Sequence::new(vec![name, alt_node]))
-    }
+    Box::new(rr::Sequence::new(vec![name, alt_node]))
 }
 
 fn build_alternative(alt: &Alternative) -> DynNode {
@@ -246,7 +212,7 @@ fn apply_modifier(node: DynNode, modifier: &Modifier) -> DynNode {
 }
 
 // Helper: rule_name for terminals/nonterminals (alphanumeric starting with letter)
-pub fn rule_name<'a>(input: &'a mut &str) -> ModalResult<String> {
+pub fn rule_name(input: &mut &str) -> ModalResult<String> {
     let rule = (
         alpha1,
         take_while(0.., ('a'..='z', 'A'..='Z', '0'..='9', ' ', '_', '-')),
@@ -741,7 +707,7 @@ mod tests {
         let input = "<foo> ::= <bar> | \"baz\"";
         let diagram = parse_ebnf(input).unwrap();
         // Basic check: diagram has nodes
-        assert!(diagram.to_string().len() > 0);
+        assert!(!diagram.to_string().is_empty());
         // Could check for specific SVG elements, but for now, ensure no panic
     }
 
