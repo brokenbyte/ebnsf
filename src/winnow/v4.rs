@@ -1,8 +1,12 @@
+use railroad::{self as rr, Diagram};
+use std::error::Error;
 use winnow::ModalResult;
 use winnow::ascii::{alpha1, multispace0, multispace1, space0, space1};
 use winnow::combinator::{alt, delimited, preceded, separated};
 use winnow::prelude::*;
 use winnow::token::take_while;
+
+pub type DynNode = Box<dyn rr::Node>;
 
 // Custom data structures for EBNF AST
 #[derive(Debug, Clone, PartialEq)]
@@ -55,21 +59,36 @@ pub fn element<'a>(input: &'a mut &str) -> ModalResult<Element> {
     Ok(Element { atom, modifier })
 }
 
-// Terminal parser: parses "alphanum..."
+// Terminal parser: parses quoted (single/double) or unquoted literals
 pub fn terminal<'a>(input: &'a mut &str) -> ModalResult<Element> {
-    delimited('"', rule_name, '"')
-        .map(|content| Element {
-            atom: Atom::Terminal(content),
-            modifier: None,
-        })
-        .parse_next(input)
+    use winnow::token::take_until;
+    alt((
+        delimited('"', take_until(1.., '"'), '"'),
+        delimited('\'', take_until(1.., '\''), '\''),
+        take_while(1.., |c: char| {
+            !c.is_whitespace()
+                && c != '|'
+                && c != '('
+                && c != ')'
+                && c != '<'
+                && c != '>'
+                && c != ':'
+                && c != '='
+        }),
+    ))
+    .map(|content: &str| Element {
+        atom: Atom::Terminal(content.to_string()),
+        modifier: None,
+    })
+    .parse_next(input)
 }
 
 // Nonterminal parser: parses <alphanum...>
 pub fn nonterminal<'a>(input: &'a mut &str) -> ModalResult<Element> {
-    delimited('<', rule_name, '>')
-        .map(|content| Element {
-            atom: Atom::Nonterminal(content),
+    use winnow::token::take_until;
+    delimited('<', take_until(1.., '>'), '>')
+        .map(|content: &str| Element {
+            atom: Atom::Nonterminal(content.to_string()),
             modifier: None,
         })
         .parse_next(input)
@@ -87,6 +106,7 @@ pub fn atom<'a>(input: &'a mut &str) -> ModalResult<Atom> {
 
 // Sequence parser: space-separated list of elements
 pub fn sequence<'a>(input: &'a mut &str) -> ModalResult<Sequence> {
+    (multispace0).void().parse_next(input)?;
     separated(1.., element, space1).parse_next(input)
 }
 
@@ -123,6 +143,78 @@ pub fn parse_rule<'a>(input: &'a mut &str) -> ModalResult<Rule> {
 pub fn parse_grammar<'a>(input: &'a mut &str) -> ModalResult<Grammar> {
     (multispace0).void().parse_next(input)?; // Skip leading whitespace
     separated(1.., parse_rule, multispace1).parse_next(input)
+}
+
+// Parses EBNF and builds a railroad diagram
+pub fn parse_ebnf(src: &str) -> Result<Diagram<DynNode>, Box<dyn Error>> {
+    let mut input = src;
+    let grammar = parse_grammar(&mut input).map_err(|e| format!("Parsing error: {:?}", e))?;
+    let diagram = build_diagram(grammar);
+    Ok(diagram)
+}
+
+fn build_diagram(grammar: Grammar) -> Diagram<DynNode> {
+    let nodes: Vec<DynNode> = grammar
+        .into_iter()
+        .map(|rule| {
+            Box::new(rr::Sequence::new(vec![
+                Box::new(rr::SimpleStart) as DynNode,
+                build_rule(&rule),
+                Box::new(rr::SimpleStart),
+            ])) as DynNode
+        })
+        .collect();
+
+    let mut diagram = Diagram::new(Box::new(rr::VerticalGrid::new(nodes)) as DynNode);
+    diagram.add_css(rr::DEFAULT_CSS);
+    diagram
+}
+
+fn build_rule(rule: &Rule) -> DynNode {
+    let name = Box::new(rr::Comment::new(rule.name.clone())) as DynNode;
+    let alt_node = build_alternative(&rule.alternatives);
+
+    if rule.alternatives.len() == 1 {
+        Box::new(rr::Sequence::new(vec![name, alt_node]))
+    } else {
+        Box::new(rr::Sequence::new(vec![name, alt_node]))
+    }
+}
+
+fn build_alternative(alt: &Alternative) -> DynNode {
+    if alt.len() == 1 {
+        build_sequence(&alt[0])
+    } else {
+        Box::new(rr::Choice::new(alt.iter().map(build_sequence).collect()))
+    }
+}
+
+fn build_sequence(seq: &Sequence) -> DynNode {
+    Box::new(rr::Sequence::new(seq.iter().map(build_element).collect()))
+}
+
+fn build_element(elem: &Element) -> DynNode {
+    let mut node = build_atom(&elem.atom);
+    if let Some(modifier) = &elem.modifier {
+        node = apply_modifier(node, modifier);
+    }
+    node
+}
+
+fn build_atom(atom: &Atom) -> DynNode {
+    match atom {
+        Atom::Terminal(s) => Box::new(rr::Terminal::new(s.clone())),
+        Atom::Nonterminal(s) => Box::new(rr::NonTerminal::new(s.clone())),
+        Atom::Group(alt) => build_alternative(alt),
+    }
+}
+
+fn apply_modifier(node: DynNode, modifier: &Modifier) -> DynNode {
+    match modifier {
+        Modifier::Optional => Box::new(rr::Optional::new(node)),
+        Modifier::ZeroOrMore => Box::new(rr::Optional::new(rr::Repeat::new(node, rr::Empty))),
+        Modifier::OneOrMore => Box::new(rr::Repeat::new(node, rr::Empty)),
+    }
 }
 
 // Helper: rule_name for terminals/nonterminals (alphanumeric starting with letter)
@@ -614,5 +706,29 @@ mod tests {
                 }
             ]]
         );
+    }
+
+    #[test]
+    fn test_parse_ebnf() {
+        let input = "<foo> ::= <bar> | \"baz\"";
+        let diagram = parse_ebnf(input).unwrap();
+        // Basic check: diagram has nodes
+        assert!(diagram.to_string().len() > 0);
+        // Could check for specific SVG elements, but for now, ensure no panic
+    }
+
+    #[test]
+    fn test_parse_semver_ebnf() {
+        let content = std::fs::read_to_string("grammars/semver2-0.ebnf").unwrap();
+        let mut input = content.as_str();
+        let grammar = parse_grammar(&mut input).unwrap();
+        // Check basic structure: should have 20 rules
+        assert_eq!(grammar.len(), 20);
+        // Check first rule
+        assert_eq!(grammar[0].name, "valid semver");
+        assert_eq!(grammar[0].alternatives.len(), 4); // 4 alternatives
+        // Check a terminal rule with many alternatives
+        let letter_rule = grammar.iter().find(|r| r.name == "letter").unwrap();
+        assert_eq!(letter_rule.alternatives.len(), 52); // 52 letter alternatives
     }
 }
