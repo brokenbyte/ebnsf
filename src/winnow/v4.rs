@@ -3,12 +3,46 @@ use railroad::{self as rr, Diagram};
 use std::error::Error;
 use winnow::ModalResult;
 use winnow::ascii::{alpha1, multispace0, multispace1, space0, space1};
-use winnow::combinator::{alt, delimited, preceded, separated};
-use winnow::error::{ContextError, ErrMode};
+use winnow::combinator::{alt, cut_err, delimited, fail, preceded, separated};
+use winnow::error::{ContextError, ErrMode, ParseError};
 use winnow::prelude::*;
 use winnow::token::take_while;
 
+use winnow::combinator::repeat;
+use winnow::error::{FromExternalError, ParserError};
+use winnow::token::take_till;
+
+use winnow::error::{StrContext, StrContextValue};
+
 pub type DynNode = Box<dyn rr::Node>;
+
+#[derive(Debug)]
+pub struct EbnsfError {
+    message: String,
+    // Byte spans are tracked, rather than line and column.
+    // This makes it easier to operate on programmatically
+    // and doesn't limit us to one definition for column count
+    // which can depend on the output medium and application.
+    span: std::ops::Range<usize>,
+    input: String,
+}
+
+impl EbnsfError {
+    // Avoiding `From` so `winnow` types don't become part of our public API
+    fn from_parse(error: ParseError<&str, ContextError>) -> Self {
+        // The default renderer for `ContextError` is still used but that can be
+        // customized as well to better fit your needs.
+        let message = error.inner().to_string();
+        let input = (*error.input()).to_owned();
+        // Assume the error span is only for the first `char`.
+        let span = error.char_span();
+        Self {
+            message,
+            span,
+            input,
+        }
+    }
+}
 
 // Custom data structures for EBNF AST
 #[derive(Debug, Clone, PartialEq)]
@@ -40,7 +74,10 @@ pub struct Rule {
     pub alternatives: Alternative,
 }
 
-pub type Grammar = Vec<Rule>;
+// pub type Grammar = Vec<Rule>;
+pub struct Grammar {
+    rules: Vec<Rule>,
+}
 
 // Modifier parser: parses ?, *, + (optional, at most one)
 pub fn modifier(input: &mut &str) -> ModalResult<Option<Modifier>> {
@@ -62,6 +99,41 @@ pub fn element(input: &mut &str) -> ModalResult<Element> {
 }
 
 // Terminal parser: parses quoted (single/double) strings
+//
+// delimited('"', cut_err(take_until(1.., '"')), '"')
+//     .context(StrContext::Expected(StrContextValue::Description("closing double quote"))),
+
+pub fn terminal2(input: &mut &str) -> ModalResult<Element> {
+    use winnow::token::take_until;
+
+    let build_string = repeat(
+        0..,
+        // Our parser function – parses a single string fragment
+        parse_fragment,
+    )
+    .fold(
+        // Our init value, an empty string
+        String::new,
+        // Our folding function. For each fragment, append the fragment to the
+        // string.
+        |mut string, fragment| {
+            match fragment {
+                StringFragment::Literal(s) => string.push_str(s),
+                StringFragment::EscapedChar(c) => string.push_str(c),
+                StringFragment::EscapedWS => {}
+            }
+            string
+        },
+    );
+
+    delimited('"', build_string, '"')
+        .map(|content: String| Element {
+            atom: Atom::Terminal(content),
+            modifier: None,
+        })
+        .parse_next(input)
+}
+
 pub fn terminal(input: &mut &str) -> ModalResult<Element> {
     use winnow::token::take_until;
     alt((
@@ -75,15 +147,25 @@ pub fn terminal(input: &mut &str) -> ModalResult<Element> {
     .parse_next(input)
 }
 
-// Nonterminal parser: parses <alphanum...>
+// Nonterminal parser: parses <letter + valid chars...>
 pub fn nonterminal(input: &mut &str) -> ModalResult<Element> {
-    use winnow::token::take_until;
-    delimited('<', take_until(1.., '>'), '>')
-        .map(|content: &str| Element {
-            atom: Atom::Nonterminal(content.to_string()),
-            modifier: None,
-        })
-        .parse_next(input)
+    use winnow::token::take_while;
+    delimited(
+        '<',
+        (
+            alpha1,
+            take_while(0.., |c: char| {
+                c.is_alphanumeric() || c == '_' || c == '-' || c == ' '
+            }),
+        )
+            .map(|(first, rest): (&str, &str)| format!("{}{}", first, rest)),
+        '>',
+    )
+    .map(|content: String| Element {
+        atom: Atom::Nonterminal(content),
+        modifier: None,
+    })
+    .parse_next(input)
 }
 
 // Atom parser: chooses between terminal, nonterminal, or group
@@ -110,7 +192,8 @@ pub fn parse_sequence(input: &mut &str) -> ModalResult<Alternative> {
 
 // Group parser: parses (sequence) recursively, supporting alternatives
 pub fn group(input: &mut &str) -> ModalResult<Alternative> {
-    delimited('(', parse_sequence, ')').parse_next(input)
+    use winnow::combinator::preceded;
+    delimited('(', parse_sequence, preceded(multispace0, ')')).parse_next(input)
 }
 
 // Parses a single rule: <rule_name> ::= <alternatives>
@@ -133,23 +216,50 @@ pub fn parse_rule(input: &mut &str) -> ModalResult<Rule> {
 
 // Parses multiple rules separated by whitespace/newlines
 pub fn parse_grammar(input: &mut &str) -> ModalResult<Grammar> {
-    separated(1.., parse_rule, multispace1).parse_next(input)
+    (multispace0).void().parse_next(input)?;
+    let rules = separated(1.., parse_rule, multispace1).parse_next(input)?;
+
+    Ok(Grammar { rules })
 }
 
 // Parses EBNF and builds a railroad diagram
 pub fn parse_ebnf(src: &str) -> Result<Diagram<DynNode>, Box<dyn Error>> {
     use winnow::combinator::eof;
-    let original_input = src;
     let mut input = src;
-    let grammar = parse_grammar(&mut input).map_err(|e| format_error(original_input, input, e))?;
+    let grammar = parse_grammar(&mut input).map_err(|e| format_error(src, input, e))?;
     multispace0::<&str, ErrMode<ContextError>>
         .parse_next(&mut input)
-        .map_err(|e| format_error(original_input, input, e))?;
+        .map_err(|e| format_error(src, input, e))?;
     eof::<&str, ErrMode<ContextError>>
         .parse_next(&mut input)
-        .map_err(|e| format_error(original_input, input, e))?;
+        .map_err(|e| format_error(src, input, e))?;
+    // .map_err(EbnsfError::from_parse)?;
     let diagram = build_diagram(grammar);
     Ok(diagram)
+}
+
+impl std::str::FromStr for Grammar {
+    type Err = EbnsfError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        parse_grammar
+            .parse(input)
+            .map_err(|e| EbnsfError::from_parse(e))
+    }
+}
+
+use annotate_snippets::{AnnotationKind, Level, Renderer, Snippet, renderer::DecorStyle};
+
+impl std::fmt::Display for EbnsfError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let report = &[Level::ERROR.primary_title(&self.message).element(
+            Snippet::source(&self.input)
+                .annotation(AnnotationKind::Primary.span(self.span.clone())),
+        )];
+
+        let rendered = Renderer::plain().render(report);
+        rendered.fmt(f)
+    }
 }
 
 fn format_error(source: &str, remaining: &str, _err: ErrMode<ContextError>) -> Box<dyn Error> {
@@ -171,6 +281,7 @@ fn format_error(source: &str, remaining: &str, _err: ErrMode<ContextError>) -> B
 
 fn build_diagram(grammar: Grammar) -> Diagram<DynNode> {
     let nodes: Vec<DynNode> = grammar
+        .rules
         .into_iter()
         .map(|rule| {
             Box::new(rr::Sequence::new(vec![
@@ -648,7 +759,7 @@ mod tests {
     #[test]
     fn test_parse_grammar() {
         let mut input = "<foo> ::= <bar>\n<baz> ::= \"qux\" | <quux>";
-        let result = parse_grammar(&mut input).unwrap();
+        let result = parse_grammar(&mut input).unwrap().rules;
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].name, "foo");
         assert_eq!(
@@ -838,4 +949,93 @@ mod tests {
         let result = terminal(&mut input).unwrap();
         assert_eq!(result.atom, Atom::Terminal("he said \"world\"".to_string()));
     }
+}
+/// Parse a string. Use a loop of `parse_fragment` and push all of the fragments
+/// into an output string.
+pub(crate) fn parse_string(input: &mut &str, delim: char) -> ModalResult<String> {
+    // Repeat::fold is the equivalent of iterator::fold. It runs a parser in a loop,
+    // and for each output value, calls a folding function on each output value.
+    let build_string = repeat(
+        0..,
+        // Our parser function – parses a single string fragment
+        parse_fragment,
+    )
+    .fold(
+        // Our init value, an empty string
+        String::new,
+        // Our folding function. For each fragment, append the fragment to the
+        // string.
+        |mut string, fragment| {
+            match fragment {
+                StringFragment::Literal(s) => string.push_str(s),
+                StringFragment::EscapedChar(c) => string.push_str(c),
+                StringFragment::EscapedWS => {}
+            }
+            string
+        },
+    );
+
+    // Finally, parse the string. Note that, if `build_string` could accept a raw
+    // " character, the closing delimiter " would never match. When using
+    // `delimited` with a looping parser (like Repeat::fold), be sure that the
+    // loop won't accidentally match your closing delimiter!
+    delimited('"', build_string, '"').parse_next(input)
+}
+
+/// A string fragment contains a fragment of a string being parsed: either
+/// a non-empty Literal (a series of non-escaped characters), a single
+/// parsed escaped character, or a block of escaped whitespace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StringFragment<'a> {
+    Literal(&'a str),
+    EscapedChar(&'a str),
+    EscapedWS,
+}
+
+/// Combine `parse_literal`, `parse_escaped_whitespace`, and `parse_escaped_char`
+/// into a `StringFragment`.
+fn parse_fragment<'a>(input: &mut &'a str) -> ModalResult<StringFragment<'a>> {
+    alt((
+        // The `map` combinator runs a parser, then applies a function to the output
+        // of that parser.
+        parse_literal.map(StringFragment::Literal),
+        parse_escaped_char.map(StringFragment::EscapedChar),
+    ))
+    .parse_next(input)
+}
+
+/// Parse a non-empty block of text that doesn't include \ or "
+fn parse_literal<'a>(input: &mut &'a str) -> ModalResult<&'a str> {
+    // `take_till` parses a string of 0 or more characters that aren't one of the
+    // given characters.
+    let not_quote_slash = take_till(1.., ['"', '\\']);
+
+    // `verify` runs a parser, then runs a verification function on the output of
+    // the parser. The verification function accepts the output only if it
+    // returns true. In this case, we want to ensure that the output of take_till
+    // is non-empty.
+    not_quote_slash
+        .verify(|s: &str| !s.is_empty())
+        .parse_next(input)
+}
+
+/// Parse an escaped character: \n, \t, \r, \u{00AC}, etc.
+fn parse_escaped_char<'a>(input: &mut &'a str) -> ModalResult<&'a str> {
+    preceded(
+        '\\',
+        cut_err(alt((
+            't'.value("\\t"),
+            '\\'.value("\\"),
+            '"'.value("\""),
+            '\''.value("'"),
+            fail.context(StrContext::Label("escape sequence")),
+        ))),
+    )
+    .parse_next(input)
+}
+
+/// Parse a backslash, followed by any amount of whitespace. This is used later
+/// to discard any escaped whitespace.
+fn parse_escaped_whitespace<'a>(input: &mut &'a str) -> ModalResult<&'a str> {
+    preceded('\\', multispace1).parse_next(input)
 }

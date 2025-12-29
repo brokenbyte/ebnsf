@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 pub mod winnow;
 
 use pest::{Parser, iterators::Pair};
