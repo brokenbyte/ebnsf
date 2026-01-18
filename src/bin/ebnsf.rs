@@ -2,7 +2,7 @@
 
 use ::winnow::Parser as _;
 use clap::Parser;
-use ebnsf::{parse_ebnf, winnow};
+use ebnsf::winnow;
 use railroad::{self as rr, Diagram, Empty};
 
 use std::path::PathBuf;

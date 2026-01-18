@@ -1,7 +1,7 @@
 #![allow(unused)]
 
 use ::winnow::Parser as _;
-use ebnsf::{parse_ebnf, winnow};
+// use ebnsf::{parse_ebnf, winnow};
 
 use ebnsf::winnow::v4::Grammar;
 
