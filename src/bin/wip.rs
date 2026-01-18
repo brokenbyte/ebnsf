@@ -15,8 +15,12 @@ fn main() {
     let g: Result<Grammar, _> = input.parse();
 
     match g {
-        Ok(_) => {println!("Successful parse")},
-        Err(e) => {println!("{e}")},
+        Ok(_) => {
+            println!("Successful parse")
+        }
+        Err(e) => {
+            println!("{e}")
+        }
     }
     //
 }
