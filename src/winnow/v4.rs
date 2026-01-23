@@ -3,6 +3,7 @@ use railroad::{self as rr, Diagram};
 use std::error::Error;
 use winnow::ModalResult;
 use winnow::ascii::{alpha1, multispace0, multispace1, space0, space1};
+use winnow::combinator::eof;
 use winnow::combinator::{alt, cut_err, delimited, fail, preceded, separated};
 use winnow::error::{ContextError, ErrMode, ParseError};
 use winnow::prelude::*;
@@ -25,6 +26,7 @@ pub struct EbnsfError {
     // which can depend on the output medium and application.
     span: std::ops::Range<usize>,
     input: String,
+    path: Option<String>,
 }
 
 impl EbnsfError {
@@ -40,9 +42,17 @@ impl EbnsfError {
             message,
             span,
             input,
+            path: None,
         }
     }
+
+    pub fn with_path(mut self, path: impl Into<String>) -> Self {
+        self.path = Some(path.into());
+        self
+    }
 }
+
+impl Error for EbnsfError {}
 
 // Custom data structures for EBNF AST
 #[derive(Debug, Clone, PartialEq)]
@@ -99,41 +109,6 @@ pub fn element(input: &mut &str) -> ModalResult<Element> {
 }
 
 // Terminal parser: parses quoted (single/double) strings
-//
-// delimited('"', cut_err(take_until(1.., '"')), '"')
-//     .context(StrContext::Expected(StrContextValue::Description("closing double quote"))),
-
-pub fn terminal2(input: &mut &str) -> ModalResult<Element> {
-    use winnow::token::take_until;
-
-    let build_string = repeat(
-        0..,
-        // Our parser function – parses a single string fragment
-        parse_fragment,
-    )
-    .fold(
-        // Our init value, an empty string
-        String::new,
-        // Our folding function. For each fragment, append the fragment to the
-        // string.
-        |mut string, fragment| {
-            match fragment {
-                StringFragment::Literal(s) => string.push_str(s),
-                StringFragment::EscapedChar(c) => string.push_str(c),
-                StringFragment::EscapedWS => {}
-            }
-            string
-        },
-    );
-
-    delimited('"', build_string, '"')
-        .map(|content: String| Element {
-            atom: Atom::Terminal(content),
-            modifier: None,
-        })
-        .parse_next(input)
-}
-
 pub fn terminal(input: &mut &str) -> ModalResult<Element> {
     use winnow::token::take_until;
     alt((
@@ -159,7 +134,9 @@ pub fn nonterminal(input: &mut &str) -> ModalResult<Element> {
             }),
         )
             .map(|(first, rest): (&str, &str)| format!("{}{}", first, rest)),
-        '>',
+        cut_err('>').context(StrContext::Expected(StrContextValue::Description(
+            "closing '>' for nonterminal",
+        ))),
     )
     .map(|content: String| Element {
         atom: Atom::Nonterminal(content),
@@ -218,22 +195,17 @@ pub fn parse_rule(input: &mut &str) -> ModalResult<Rule> {
 pub fn parse_grammar(input: &mut &str) -> ModalResult<Grammar> {
     (multispace0).void().parse_next(input)?;
     let rules = separated(1.., parse_rule, multispace1).parse_next(input)?;
+    (multispace0, eof).void().parse_next(input)?;
 
     Ok(Grammar { rules })
 }
 
 // Parses EBNF and builds a railroad diagram
-pub fn parse_ebnf(src: &str) -> Result<Diagram<DynNode>, Box<dyn Error>> {
-    use winnow::combinator::eof;
+pub fn parse_ebnf(src: &str) -> Result<Diagram<DynNode>, EbnsfError> {
     let mut input = src;
-    let grammar = parse_grammar(&mut input).map_err(|e| format_error(src, input, e))?;
-    multispace0::<&str, ErrMode<ContextError>>
-        .parse_next(&mut input)
-        .map_err(|e| format_error(src, input, e))?;
-    eof::<&str, ErrMode<ContextError>>
-        .parse_next(&mut input)
-        .map_err(|e| format_error(src, input, e))?;
-    // .map_err(EbnsfError::from_parse)?;
+
+    let grammar = input.parse()?;
+
     let diagram = build_diagram(grammar);
     Ok(diagram)
 }
@@ -252,31 +224,22 @@ use annotate_snippets::{AnnotationKind, Level, Renderer, Snippet, renderer::Deco
 
 impl std::fmt::Display for EbnsfError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let report = &[Level::ERROR.primary_title(&self.message).element(
-            Snippet::source(&self.input)
-                .annotation(AnnotationKind::Primary.span(self.span.clone())),
-        )];
+        let mut snippet = Snippet::source(&self.input).annotation(
+            AnnotationKind::Primary
+                .span(self.span.clone())
+                .label(&self.message),
+        );
 
-        let rendered = Renderer::plain().render(report);
-        rendered.fmt(f)
+        if let Some(path) = &self.path {
+            snippet = snippet.path(path);
+        }
+
+        let report = &[Level::ERROR
+            .primary_title("Failed to parse EBNF")
+            .element(snippet)];
+
+        Renderer::plain().render(report).fmt(f)
     }
-}
-
-fn format_error(source: &str, remaining: &str, _err: ErrMode<ContextError>) -> Box<dyn Error> {
-    let consumed_len = source.len() - remaining.len();
-    let consumed = &source[..consumed_len];
-    let line = consumed.chars().filter(|&c| c == '\n').count() + 1;
-    let last_newline = consumed.rfind('\n').map(|i| i + 1).unwrap_or(0);
-    let column = consumed[last_newline..].chars().count();
-
-    let source_line = source.lines().nth(line - 1).unwrap_or("");
-
-    let caret_line = format!("  |{}{}", " ".repeat(column.saturating_sub(1)), "^");
-    format!(
-        "error: Parse Error\n --> \n  |\n{} | {}\n{}\n  = parse error",
-        line, source_line, caret_line
-    )
-    .into()
 }
 
 fn build_diagram(grammar: Grammar) -> Diagram<DynNode> {

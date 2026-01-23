@@ -25,7 +25,7 @@ fn main() {
     let diagram = match winnow::v4::parse_ebnf(&ebnf) {
         Ok(p) => p,
         Err(e) => {
-            println!("{e}");
+            println!("{}", e.with_path(&cli.input));
             std::process::exit(1);
         }
     };
