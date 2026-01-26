@@ -22,7 +22,7 @@ fn main() {
 
     let ebnf = std::fs::read_to_string(&cli.input).unwrap();
 
-    let diagram = match winnow::v4::parse_ebnf(&ebnf) {
+    let diagram = match winnow::parse_ebnf(&ebnf) {
         Ok(p) => p,
         Err(e) => {
             println!("{}", e.with_path(&cli.input));

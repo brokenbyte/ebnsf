@@ -3,7 +3,7 @@
 use ::winnow::Parser as _;
 // use ebnsf::{parse_ebnf, winnow};
 
-use ebnsf::winnow::v4::Grammar;
+use ebnsf::winnow::Grammar;
 
 fn main() {
     let mut input = "\"unclo\\sed\"";
